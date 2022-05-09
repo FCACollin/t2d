@@ -1,0 +1,284 @@
+---
+title: "micro-RNA: demographics"
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d at %H:%M:%S (%Z)')`"
+bibliography: references.bib
+---
+
+## Demographics:
+
+Subject level variables, such as the age and number of training relied on
+\index{analysis of variance}. The variables associated with repeated
+measurements (measurement at baseline and after exercise) such as BMI and
+diet were analysed in a mixed model to estimate the effect of the diabetes
+status (D) and the exercise (E) while accounting for the random effect
+associated with the patient; the interaction term DxE was investigated *via*
+a log-likelihood ratio test. These models were used to provided least mean
+square estimates so as to:
+
+- verify the balanced panel of subjects.
+- verify the leading differences between diabetes groups and due to the
+  exercise.
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+# wrap_lines <- function(x) {
+#   y <- strwrap(x, width = 80)
+#   paste(y, collapse = " ")
+# }
+#' @examples
+#' wrap_lines(
+#'   "add footnotes to a flextable object. A symbol is appened where the footnote
+#'   is defined and the note is appened in the footer part of the table."
+#' )
+```
+
+```{r, ads}
+#| code-fold: show
+
+key_is_unique <- function(x) all(table(x) == 1L)
+library(dplyr)
+library(assertthat)
+
+clindata <- "extdata/miRNA/ClinicalData_190910.csv" |>
+  read.table(
+    sep = ";",
+    header = TRUE,
+    na.strings = "NA",
+    stringsAsFactors = FALSE,
+    skip = 11
+  ) |>
+  as_tibble() |>
+  rename(
+    subjid = P,
+    diab = D,
+    trainn = n_train,
+    grp = G
+  ) |>
+  within(expr = {
+    diab <- factor(diab)
+    subjid <- factor(subjid)
+    grp <- factor(grp)
+  })
+
+adsl <- dbs.data::adsl
+adsl |> head() |> knitr::kable(caption = "Outlook ADSL")
+
+advst <- clindata |>
+  rename(bmi = BMI) |>
+  select(subjid, diab, grp, bmi, kcal)
+
+advst |> head() |> knitr::kable(caption = "Outlook ADVST")
+```
+
+@Szczerbinski2022
+
+```{r, t_02_01}
+library(lme4)
+mod_age <- lm(age ~ diab, data = adsl)
+mod_train <- lm(trainn ~ diab, data = adsl)
+
+mod_bmi_int <- lmer(bmi ~ diab * grp + (1 | subjid), data = advst)
+mod_bmi <- lmer(bmi ~ diab + grp + (1 | subjid), data = advst)
+
+mod_kcal_int <- lmer(kcal ~ diab * grp + (1 | subjid), data = advst)
+mod_kcal <- res2 <- lmer(kcal ~ diab + grp + (1 | subjid), data = advst)
+
+pval_format <- function(x, nm) as_tibble(x)
+pval <- function(x, ...) UseMethod("pval", x)
+pval.lm <- function(x, ...) {
+  aov <- car::Anova(x)
+  y <- t(aov[-nrow(aov), ncol(aov), drop = FALSE])
+  pval_format(y)
+}
+
+pval.lmerMod <- function(x, lrt, ...) {
+  aov <- car::Anova(x)
+  y <- t(aov[, ncol(aov), drop = FALSE])
+  # likelihood ratio test (‘p(DxE)‘)
+  aov <- anova(x, lrt)
+  y <- cbind(y, t(aov["lrt", "Pr(>Chisq)", drop = FALSE]))
+  pval_format(y)
+}
+
+#' @examples
+#' pval(mod_age)
+#' pval(mod_train)
+#' pval(mod_bmi, mod_bmi_int)
+#' pval(mod_kcal, mod_kcal_int)
+
+lms <- function(x, specs = ~diab) {
+  eff_nm <- as.character(rev(specs)[[1]])
+  y <- emmeans::emmeans(x, specs = specs)
+  y <- as.data.frame(y)
+  emm_nm <- c("emmean", paste(c("lower", "upper"), sep = ".", "CL"))
+  y <- y[c(eff_nm[eff_nm %in% names(y)], emm_nm)]
+  tidyr::pivot_wider(
+    y,
+    names_from = "diab",
+    values_from = all_of(emm_nm)
+  )
+}
+
+#' @examples
+#' lms(mod_age, ~diab)
+#' lms(mod_bmi, ~diab|grp)
+
+eff_pval <- function(x, specs, x2 = NULL) {
+  eff <- lms(x, specs)
+  p <- pval(x, x2)
+  names(p) <- c(
+    diab = "p (D)",
+    grp = "p (E)",
+    lrt = "p (DxE)"
+  )[names(p)]
+  
+  cbind(
+    var = all.vars(terms(x))[[1]],
+    union_all(eff, p)
+  )
+}
+
+nsmall <- function(x, nsmall)
+  format(round(x, digits = nsmall), nsmall = nsmall)
+
+format_mean_ci <- function(mean, lcl, ucl, digits = 1) {
+  ifelse(
+    is.na(mean),
+    "",
+    paste0(
+      nsmall(mean, digits),
+      " (", nsmall(lcl, digits), ", ", nsmall(ucl, digits), ")"
+    )
+  )
+}
+
+format_pval <- function(pval) {
+  ifelse(is.na(pval), "", nsmall(pval, 3))
+}
+
+format_rows <- function(df, digits = 1)
+  tibble(
+    Variable = df$var,
+    stat = df$stat,
+    group = df$grp,
+    D0 = format_mean_ci(df$emmean_D0, df$lower.CL_D0, df$upper.CL_D0, digits),
+    D1 = format_mean_ci(df$emmean_D1, df$lower.CL_D1, df$upper.CL_D1, digits),
+    D2 = format_mean_ci(df$emmean_D2, df$lower.CL_D2, df$upper.CL_D2, digits),
+    `p (D)` = format_pval(df$`p (D)`),
+    `p (E)` = format_pval(df$`p (E)`),
+    `p (DxE)` = format_pval(df$`p (DxE)`)
+  )
+
+tbl <- Reduce(
+  union_all,
+  list(
+    eff_pval(mod_age, ~diab),
+    eff_pval(mod_train, ~diab),
+    eff_pval(mod_bmi, ~diab|grp, mod_bmi_int),
+    eff_pval(mod_kcal, ~diab|grp, mod_kcal_int)
+  )
+) |>
+  within(expr = {
+    stat <- factor(
+      is.na(emmean_D0),
+      levels = c("TRUE", "FALSE"),
+      labels = c("Test", "Estimate")
+    )
+    grp <- factor(
+      grp,
+      levels = c(" ", "0_before", "1_after"),
+      labels = c(" ", "Before exercise:", "After exercise:")
+    )
+    grp[is.na(grp)] <- " "
+    var <- factor(
+      var,
+      levels = c("age", "trainn", "bmi", "kcal"),
+      labels = c("Age", "train", "BMI", "Diet")
+    )
+  }) |>
+  (function(df) df[order(df$var, df$grp, is.na(df$`p (D)`)), ])() |>
+  (function(df) split(df, f = df$var))() |>
+  lapply(
+    FUN = function(x) {
+      switch(unique(as.character(x$var)),
+             Diet = format_rows(x, digits = 0),
+             format_rows(x, digits = 1)
+      )
+    }) |>
+  bind_rows()
+
+library(flextable)
+flextable::init_flextable_defaults()
+
+tbl_ft <- tbl |>
+  within(Variable <- as.character(Variable))|>
+  bind_rows() |>
+  as_grouped_data(groups = "Variable") |>
+  flextable() |>
+  autofit() |>
+  footnote(
+    j = 6, part = "header",
+    value = as_paragraph(wrap_long_lines(
+      "Differences among the groups (independently from the exercise)"
+    )),
+    ref_symbols = "a"
+  ) |>
+  footnote(
+    j = 7, part = "header",
+    value = as_paragraph(wrap_long_lines(
+      "Differences linked to the exercise (independently from the group)"
+    )),
+    ref_symbols = "b"
+  ) |>
+  footnote(
+    j = 8, part = "header",
+    value = as_paragraph(wrap_long_lines(
+      "Interaction tested by Likelyhood Ratio Test (LRT)."
+    )),
+    ref_symbols = "c"
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_long_lines(
+      "Note: Least means square estimations acounts for diabetes effect for
+      all variables. For variables BMI and Diet, estimations include the
+      additive effect of the exercise; however, the LRT excluded any
+      significant interaction, no interaction effect was accounted for in the
+      estimations of BMI and Diet."
+    )),
+    ref_symbols = ""
+  ) |>
+  set_caption(
+    caption = "Least Means Square estimations of Age, number of trainings,
+    BMI and diet by Diabetes group and exercise along with effect tests."
+  ) |>
+  theme_booktabs()
+
+tbl_ft
+
+bnm <- "tab_02_01"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tbl_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tbl, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tbl_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tbl_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tbl, file = ., row.names = FALSE)
+```

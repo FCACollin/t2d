@@ -1,0 +1,4 @@
+paths:
+  tlg: ../tlg
+  tab: ../tlg/tables
+  dta: ../data

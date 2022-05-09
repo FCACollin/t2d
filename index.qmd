@@ -1,9 +1,9 @@
-# Preface {.unnumbered}
+---
+date: "`r format(Sys.time(), '%Y-%m-%d at %H:%M:%S (%Z)')`"
+---
 
-This is a Quarto book.
+# Preamble {.unnumbered}
 
-To learn more about Quarto books visit <https://quarto.org/docs/books>.
+Program
 
-```{r}
-1 + 1
-```
+
