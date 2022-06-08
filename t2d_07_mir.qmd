@@ -22,6 +22,8 @@ params <- if (exists("params")) {
 
 devtools::load_all("src/pkg/dbs.data")
 devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = params$knitr$results)
 library(assertthat)
 source("R/ngs.R")
 ```
@@ -150,8 +152,6 @@ ads <- besd_mae |>
   filter_for_depth("allmirna", ctrl$depth_threshold[[ngs_assay]]) |>
   filter_for_visit("Baseline") |>
   filter_for_low_expr("allmirna", ctrl$cpm_threshold[[ngs_assay]])
-
-ads
 
 dds_1_dta <- DESeq2::DESeqDataSetFromMatrix(
   countData = ads[[ngs_assay]],

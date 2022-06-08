@@ -8,3 +8,4 @@ extdata
 /.quarto/
 *.bak
 *draft*
+/core
