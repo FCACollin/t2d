@@ -2,5 +2,9 @@
 .Rhistory
 .RData
 .Ruserdata
-
+rpack_BESD
+K01_01_miRNA
+extdata
 /.quarto/
+*.bak
+*draft*

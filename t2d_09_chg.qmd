@@ -1,0 +1,227 @@
+---
+title: "Anthropometrics Change From Baseline"
+subtitle: Program 09
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+---
+
+## Tab 09 01 - Ancova - Anthropometrics Changes from Baseline by Diabetes Group
+
+_Questions:
+for the analysis of a post-treatment values, should we analyse the change
+from baseline or percentage change from baseline? Should we adjust for the
+baseline?_
+
+Back to 2003, in the context of randomized clinical trial, 
+the European Medicines Agency [@CPMP2003],
+when the endpoint is studied as a change from
+baseline, the adjustment for baseline improves the accuracy in comparison
+to non-baseline adjustment; estimates becomes also equivalent to the standard
+linear model, the choice of change from baseline analysis or raw value is then
+only a question of interpretability. 
+They renewed the recommendation in 2015 [@CHMP2015].
+
+From the academic side, the topic was repeatedly studied:
+
+- @VanBreukelen2006:
+    > _"In randomized studies both methods [Anova, no BL adjustment vs Ancova]
+    > are unbiased, but ANCOVA has more power"_
+    
+- @Liu2009 also highlighted the benefits of adjustment for baseline as a
+covariate.
+- this was later confirmed by @Zhang2014.
+- More recently @OConnell2017 also defended the superiority of the
+  Ancova-change:
+  $y_i = \beta_0 + \beta_1 X_i + \beta_2 Y_{0i,=BL} + \varepsilon_i$
+
+> _"Consistent with existing literature, our results demonstrate that each
+> method leads to unbiased treatment effect estimates, and based on precision
+> of estimates, 95% coverage probability, and power, ANCOVA modeling of either
+> change scores or post-treatment score as the outcome, prove to be the most
+> effective._"
+
+Most of the authors above are specifically working on randomized trial,
+@Vickers2001 also brought some light on the topic, and highlighted in addition
+that: working with percentage change is generally a bad idea. The extended
+to a theoretical works also indicated that the percentage change from
+baseline _"will also fail to protect from bias in the case of baseline imbalance
+and will lead to an excess of trials with non-normally distributed outcome
+data"_.
+
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = params$knitr$results)
+```
+
+
+```{r, adam}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+```
+
+```{r, ads}
+ads <- adlb |>
+  rbind(advs) |>
+  subset(basetype == "" & avisit != "Baseline") |>
+  subset(select = c(subjid, paramcd, avisit, base, chg)) |>
+  (\(x) merge(x = adsl[c("subjid", "diabcd")], y = x, by = "subjid"))() |>
+  (\(df, fct = "diabcd") {
+    df[paste0(fct, "_n")] <- factor_n(df, fct, id = "subjid", sep = " ")
+    df
+  })()
+
+head(ads)
+```
+
+```{r, extra_functions}
+format_pval <- function(x) {
+  p <- round(x, 5)
+  ifelse(
+    test = p < 0.0001,
+    yes = "<0.0001",
+    no = ifelse(
+      test = p < 0.001,
+      yes = format(round(p, 4), nsmall = 4),
+      no = ifelse(
+        test = p < 0.01,
+        yes = format(round(p, 3), nsmall = 3),
+        no = format(round(p, 2), nsmall = 2)
+      )
+    )
+  )
+}
+
+lm_by_paramcd <- function(x,
+                          dep_var = "aval",
+                          indep_var = "diabcd_n",
+                          covariate = NULL) {
+  
+  formula <- paste(
+    dep_var, "~", 
+    if (!is.null(covariate)) paste(covariate, "+"),
+    indep_var
+  )
+  formula <- as.formula(formula)
+  
+  lapply(
+    x,
+    \(x) list(data = x, lm = lm(formula, data = x))
+  )
+}
+
+make_specs <- function(var) as.formula(paste("~", var))
+lsm_by_param <- function(x, indep_var = "diabcd_n") {
+  lapply(
+    x,
+    \(x) {
+      mod_em <- emmeans::emmeans(x$lm, specs = make_specs(indep_var))
+      y <- multcomp::cld(mod_em, Letters = letters)
+      y <- as.data.frame(y)
+      cbind(
+        paramcd = unique(x$data$paramcd),
+        y,
+        diabcd_f = car::Anova(x$lm)[indep_var, "Pr(>F)"]
+      )
+    }
+  )
+}
+```
+
+```{r}
+tab_09_01_raw <- ads |>
+  (\(x) split(x, f = x$paramcd))() |>
+  lm_by_paramcd(dep_var = "chg", covariate = "base", indep_var = "diabcd_n") |>
+  lsm_by_param(indep_var = "diabcd_n") |>
+  (\(x) Reduce(rbind, x))()
+ 
+tab_09_01 <- tab_09_01_raw |>
+  (\(df) df[order(df$diabcd_n), ])() |>
+  within({
+    val <- paste0(
+      signif(emmean, 3),
+      " (", signif(lower.CL, 3), ", ", signif(upper.CL, 3), ")"
+    )
+    pval <- format_pval(diabcd_f)
+  }) |>
+  tidyr::pivot_wider(
+    id_cols = c("paramcd", "pval", "diabcd_f"),
+    values_from = "val",
+    names_from = "diabcd_n"
+  ) |>
+  (\(x) x[order(x$diabcd_f), ])()
+tab_09_01
+```
+
+```{r}
+library(flextable)
+wrap_line <- function(x) paste(strwrap(x, width = 80), collapse = " ")
+tab_09_01_ft <- tab_09_01 |>
+  subset(select = -diabcd_f) |>
+  flextable() |>
+  autofit() |>
+  footnote(
+    value = as_paragraph(
+      "Note: rows are ordered by increasing p values, most significant on top."
+    ),
+    ref_symbols = ""
+  ) |>
+  footnote(
+    part = "header",
+    i = 1, j = 2,
+    value = as_paragraph(
+      "Note: pval, p value of diabetes group effect test by F test."
+    ),
+    ref_symbols = "a"
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_line(
+      "Source: Full Analysis Set, observed cases at baseline and post
+      intervention."
+    )),
+    ref_symbols = ""
+  ) |>
+  add_header_lines(wrap_long_lines(
+    "Analysis Set: Full Analysis Set - Observed Cases"
+  )) |>
+  set_caption(
+    caption =  wrap_long_lines(
+      "Tab 09 01 - Analysis of Covariance / Least Means Square estimations of
+      Anthropometrics Changes from baseline by Diabetes Group at
+      Month 3 (95% Confidence Interval) Adjusted for Baseline"
+    )
+  ) |>
+  theme_booktabs()
+tab_09_01_ft
+```
+
+```{r}
+bnm <- "tab_09_01"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_09_01_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_09_01, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_09_01_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_09_01_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_09_01, file = ., row.names = FALSE)
+```

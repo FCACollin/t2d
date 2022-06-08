@@ -1,0 +1,535 @@
+---
+title: "Demographics and Baseline Anthropometrics"
+subtitle: Program 08
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+---
+
+## Demographics and Baseline Anthropometrics
+
+Target:
+
+- [x] Table: Demographics and baseline anthropometrics are tested via an Anova.
+- [x] Supp. Table: Post-hoc estimations / tests by diabetes groups.
+- [x] Supp. Table: extension of the anova to additional ADVS/ADLB parameters.
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = params$knitr$results)
+
+```
+
+
+```{r, adam}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+```
+
+
+```{r, ads}
+ads <- adlb |>
+  rbind(advs) |>
+  subset(dtype == "" & avisit == "Baseline") |>
+  subset(select = c(subjid, paramcd, avisit, aval, dtype)) |>
+  rbind(
+    adsl |>
+      subset(select = -c(diab, diabcd)) |>
+      tidyr::pivot_longer(
+        cols = c("age", "trainn"), names_to = "paramcd", values_to = "aval"
+      ) |>
+      within(dtype <- "") |>
+      within(avisit <- "Baseline")
+  ) |>
+  (\(x) merge(x = adsl[c("subjid", "diabcd")], y = x, by = "subjid"))() |>
+  (\(df, fct = "diabcd") {
+    df[paste0(fct, "_n")] <- factor_n(df, fct, id = "subjid", sep = " ")
+    df
+  })() |>
+  within(
+    paramcd <- factor(
+      paramcd,
+      levels = c(
+        "age", "trainn", "GLU0", "GLU30", "GLU60", "GLU120",
+        "INSULIN0", "INSULIN30", "INSULIN60", "INSULIN120",
+        "HBA1C", "HOMAB", "HOMAIR", "MATSUDA",
+        "TRIG", "CHOL", "LDL", "HDL", "VO2MAXE", "WEIGHT", "BMI",
+        "FATMASS", "BODYFATP", "LEANMASS", "VAT",
+        "DCAL", "FATACFR", "DCARBT", "DFATT", "DPROT", "SMMASS",
+        "VO2MAXLBM", "VO2MAXML"
+      )
+    ) 
+  ) |>
+  (\(df) df[order(df$paramcd), ])()
+
+```
+
+
+```{r, extra_functions}
+format_pval <- function(x) {
+  p <- round(x, 5)
+  ifelse(
+    test = p < 0.0001,
+    yes = "<0.0001",
+    no = ifelse(
+      test = p < 0.001,
+      yes = format(round(p, 4), nsmall = 4),
+      no = ifelse(
+        test = p < 0.01,
+        yes = format(round(p, 3), nsmall = 3),
+        no = format(round(p, 2), nsmall = 2)
+      )
+    )
+  )
+}
+
+lm_by_paramcd <- function(x,
+                          dep_var = "aval",
+                          indep_var = "diabcd_n",
+                          covariate = NULL) {
+  
+  formula <- paste(
+    dep_var, "~", 
+    if (!is.null(covariate)) paste(covariate, "+"),
+    indep_var
+  )
+  formula <- as.formula(formula)
+  
+  lapply(
+    x,
+    \(x) list(data = x, lm = lm(formula, data = x))
+  )
+}
+
+make_specs <- function(var) as.formula(paste("~", var))
+lsm_by_param <- function(x, indep_var = "diabcd_n") {
+  lapply(
+    x,
+    \(x) {
+      mod_em <- emmeans::emmeans(x$lm, specs = make_specs(indep_var))
+      y <- multcomp::cld(mod_em, Letters = letters)
+      y <- as.data.frame(y)
+      cbind(
+        paramcd = unique(x$data$paramcd),
+        y,
+        diabcd_f = car::Anova(x$lm)[indep_var, "Pr(>F)"]
+      )
+    }
+  )
+}
+
+lsm_pairs_by_param <- function(x, indep_var = "diabcd_n")
+  lapply(
+    x,
+    \(x) {
+      mod_em <- emmeans::emmeans(
+        x$lm, specs = indep_var, contr = "revpairwise"
+      )
+      y <- merge(
+        as.data.frame(mod_em$contrast)[c("contrast", "p.value")],
+        confint(mod_em)$contrasts
+      )
+      cbind(paramcd = unique(x$data$paramcd), y)
+    }
+  )
+```
+
+
+## Tab 08 01 - Demographics and Baseline Anthropometrics by Diabetes Group
+
+```{r}
+tab_08_01_raw <- ads |>
+  subset(
+    paramcd %in% c(
+      "age", "trainn", "GLU0", "GLU30", "GLU60", "GLU120",
+      "INSULIN0", "INSULIN30", "INSULIN60", "INSULIN120",
+      "HBA1C", "HOMAB", "HOMAIR", "MATSUDA",
+      "TRIG", "CHOL", "LDL", "HDL", "VO2MAXE", "WEIGHT", "BMI",
+      "FATMASS", "BODYFATP", "LEANMASS", "VAT"
+    )
+  ) |>
+  (\(x) split(x, f = x$paramcd, drop = TRUE))() |>
+  lm_by_paramcd() |>
+  lsm_by_param() |>
+  (\(x) Reduce(rbind, x))()
+
+library(tidyr)
+tab_08_01 <- tab_08_01_raw |>
+  (\(df) df[order(df$diabcd_n), ])() |>
+  within({
+    val <- paste0(
+      signif(emmean, 3),
+      " (", signif(lower.CL, 3), ", ", signif(upper.CL, 3), ")"
+    )
+    pval <- format_pval(diabcd_f)
+  }) |>
+  pivot_wider(
+    id_cols = c("paramcd", "pval", "diabcd_f"),
+    values_from = "val",
+    names_from = "diabcd_n"
+  )
+tab_08_01
+```
+
+```{r}
+library(flextable)
+tab_08_01_ft <- tab_08_01 |>
+  subset(select = -diabcd_f) |>
+  flextable() |>
+  autofit() |>
+  add_header_lines(wrap_long_lines(
+    "Analysis Set: Full Analysis Set - Observed Cases at baseline"
+  )) |>
+  set_caption(
+    caption = wrap_long_lines(
+      "Tab 08 01 - Analysis of Variance / Least Means Square estimations
+      (95% Confidence Interval) of Demographics Parameters and Baseline
+      Anthropometrics by Diabetes Group"
+  )
+  ) |>
+  footnote(
+    part = "header",
+    i = 2, j = 2,
+    value = as_paragraph(
+      "Note: pval, p value of diabetes group effect test by F test."
+    ),
+    ref_symbols = "a"
+  ) |>
+  footnote(
+    value = as_paragraph(
+      "Source: ADSL and ADVS/ADLB observed cases at baseline."
+    ),
+    ref_symbols = ""
+  ) |>
+  theme_booktabs()
+tab_08_01_ft
+```
+
+```{r}
+bnm <- "tab_08_01"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_01_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_01, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_08_01_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_08_01_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_08_01, file = ., row.names = FALSE)
+```
+
+
+## Tab 08 02 - Post-hoc: Demographics and Baseline Anthropometrics by Diabetes Group
+
+```{r}
+tab_08_02_raw <- ads |>
+  subset(
+    paramcd %in% c(
+      "age", "trainn", "GLU0", "GLU30", "GLU60", "GLU120",
+      "INSULIN0", "INSULIN30", "INSULIN60", "INSULIN120",
+      "HBA1C", "HOMAB", "HOMAIR", "MATSUDA",
+      "TRIG", "CHOL", "LDL", "HDL", "VO2MAXE", "WEIGHT", "BMI",
+      "FATMASS", "BODYFATP", "LEANMASS", "VAT"
+    )
+  ) |>
+  (\(x) split(x, f = x$paramcd, drop = TRUE))() |>
+  lm_by_paramcd(indep_var = "diabcd") |>
+  lsm_pairs_by_param(indep_var = "diabcd")  |>
+  (\(x) Reduce(rbind, x))()
+
+library(tidyr)
+tab_08_02 <- tab_08_02_raw |>
+  subset(select = c(
+    paramcd, contrast, estimate, SE, df, p.value, lower.CL, upper.CL
+  ))
+
+library(flextable)
+tab_08_02_ft <- tab_08_02 |>
+  (\(x) split(x, f = x$paramcd))() |>
+  lapply(
+    \(x) {
+      x$p.value <- format(round(x$p.value, 5))
+      x$estimate <- format(signif(x$estimate, 5))
+      x$SE <- format(signif(x$SE, 6))
+      x$lower.CL <- format(signif(x$lower.CL, 5))
+      x$upper.CL <- format(signif(x$upper.CL, 5))
+      x
+    }) |>
+  (\(x) Reduce(rbind, x))()|>
+  flextable() |>
+  fontsize(size = 9, part = "all") |>
+  autofit() |>
+    add_header_lines(
+    "Analysis Set: Full Analysis Set - Observed Cases at baseline"
+  ) |>
+  set_caption(
+    caption = wrap_long_lines(
+      "Tab 08 02 - Post-hoc tests for the Analysis of Variance of
+      Demographics and Baseline Anthropometrics by Diabetes Group"
+  )
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_long_lines(
+      "CL, 95% Confidence Limit; SE, Standard Error."
+    )),
+    ref_symbols = ""
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_long_lines(
+      "Note: P value adjustment by Tukey's method for comparing a family of
+      3 estimates."
+    )),
+    ref_symbols = ""
+  )|>
+    footnote(
+    value = as_paragraph(wrap_long_lines(
+      "Source: ADSL and ADVS/ADLB observed cases at
+      baseline."
+    )),
+    ref_symbols = ""
+  ) |>
+  theme_booktabs()
+
+tab_08_02_ft
+```
+
+```{r}
+bnm <- "tab_08_02"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_02_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_02, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_08_02_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_08_02_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_08_02, file = ., row.names = FALSE)
+```
+
+
+## Tab 08 03 - Demographics and Baseline Anthropometrics by Diabetes Group (additional parameters)
+
+```{r}
+tab_08_03_raw <- ads |>
+  subset(
+    !paramcd %in% c(
+      "age", "trainn", "GLU0", "GLU30", "GLU60", "GLU120",
+      "INSULIN0", "INSULIN30", "INSULIN60", "INSULIN120",
+      "HBA1C", "HOMAB", "HOMAIR", "MATSUDA",
+      "TRIG", "CHOL", "LDL", "HDL", "VO2MAXE", "WEIGHT", "BMI",
+      "FATMASS", "BODYFATP", "LEANMASS", "VAT"
+    )
+  ) |>
+  (\(x) split(x, f = x$paramcd, drop = TRUE))() |>
+  lm_by_paramcd() |>
+  lsm_by_param() |>
+  (\(x) Reduce(rbind, x))()
+
+library(tidyr)
+tab_08_03 <- tab_08_03_raw |>
+  (\(df) df[order(df$diabcd_n), ])() |>
+  within({
+    val <- paste0(
+      signif(emmean, 3),
+      " (", signif(lower.CL, 3), ", ", signif(upper.CL, 3), ")"
+    )
+    pval <- format_pval(diabcd_f)
+  }) |>
+  pivot_wider(
+    id_cols = c("paramcd", "pval", "diabcd_f"),
+    values_from = "val",
+    names_from = "diabcd_n"
+  )
+tab_08_03
+```
+
+```{r}
+library(flextable)
+tab_08_03_ft <- tab_08_03 |>
+  subset(select = -diabcd_f) |>
+  flextable() |>
+  autofit() |>
+  add_header_lines(wrap_long_lines(
+    "Analysis Set: Full Analysis Set - Observed Cases at baseline"
+  )) |>
+  set_caption(
+    caption = wrap_long_lines(
+      "Tab 08 03 - Analysis of Variance / Least Means Square estimations
+      (95% Confidence Interval) of Demographics Parameters and Baseline
+      Anthropometrics by Diabetes Group for Supplementary Parameters"
+  )
+  ) |>
+  footnote(
+    part = "header",
+    i = 2, j = 2,
+    value = as_paragraph(
+      "Note: pval, p value of diabetes group effect test by F test."
+    ),
+    ref_symbols = "a"
+  ) |>
+  footnote(
+    value = as_paragraph(
+      "Source: ADSL and ADVS/ADLB observed cases at baseline."
+    ),
+    ref_symbols = ""
+  ) |>
+  theme_booktabs()
+tab_08_03_ft
+```
+
+```{r}
+bnm <- "tab_08_03"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_03_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_03, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_08_03_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_08_03_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_08_03, file = ., row.names = FALSE)
+```
+
+
+## Tab 08 04 - Post-hoc: Demographics and Baseline Anthropometrics by Diabetes Group (additional parameters)
+
+```{r}
+tab_08_04_raw <- ads |>
+  subset(
+    ! paramcd %in% c(
+      "age", "trainn", "GLU0", "GLU30", "GLU60", "GLU120",
+      "INSULIN0", "INSULIN30", "INSULIN60", "INSULIN120",
+      "HBA1C", "HOMAB", "HOMAIR", "MATSUDA",
+      "TRIG", "CHOL", "LDL", "HDL", "VO2MAXE", "WEIGHT", "BMI",
+      "FATMASS", "BODYFATP", "LEANMASS", "VAT"
+    )
+  ) |>
+  (\(x) split(x, f = x$paramcd, drop = TRUE))() |>
+  lm_by_paramcd(indep_var = "diabcd") |>
+  lsm_pairs_by_param(indep_var = "diabcd")  |>
+  (\(x) Reduce(rbind, x))()
+
+library(tidyr)
+tab_08_04 <- tab_08_04_raw |>
+  subset(select = c(
+    paramcd, contrast, estimate, SE, df, p.value, lower.CL, upper.CL
+  ))
+
+library(flextable)
+tab_08_04_ft <- tab_08_04 |>
+  (\(x) split(x, f = x$paramcd))() |>
+  lapply(
+    \(x) {
+      x$p.value <- format(round(x$p.value, 5))
+      x$estimate <- format(signif(x$estimate, 5))
+      x$SE <- format(signif(x$SE, 6))
+      x$lower.CL <- format(signif(x$lower.CL, 5))
+      x$upper.CL <- format(signif(x$upper.CL, 5))
+      x
+    }) |>
+  (\(x) Reduce(rbind, x))()|>
+  flextable() |>
+  fontsize(size = 9, part = "all") |>
+  autofit() |>
+    add_header_lines(
+    "Analysis Set: Full Analysis Set - Observed Cases at baseline"
+  ) |>
+  set_caption(
+    caption = wrap_long_lines(
+      "Tab 08 04 - Post-hoc tests for the Analysis of Variance of
+      Demographics and Baseline Anthropometrics by Diabetes Group"
+  )
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_long_lines(
+      "CL, 95% Confidence Limit; SE, Standard Error."
+    )),
+    ref_symbols = ""
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_long_lines(
+      "Note: P value adjustment by Tukey's method for comparing a family of
+      3 estimates."
+    )),
+    ref_symbols = ""
+  )|>
+    footnote(
+    value = as_paragraph(wrap_long_lines(
+      "Source: ADSL and ADVS/ADLB observed cases at
+      baseline."
+    )),
+    ref_symbols = ""
+  ) |>
+  theme_booktabs()
+
+tab_08_04_ft
+```
+
+```{r}
+bnm <- "tab_08_04"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_04_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_08_04, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_08_04_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_08_04_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_08_04, file = ., row.names = FALSE)
+```

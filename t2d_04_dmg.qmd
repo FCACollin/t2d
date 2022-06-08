@@ -1,0 +1,274 @@
+---
+title: "demographics - deprecated"
+author: "Francois Collin"
+---
+
+_Clinical characteristics of studied groups and their response to exercise 
+intervention are presented in table 1._
+
+_as I mentioned before, here I think we should show results of differences
+between groups in age, BMI, trainings using a simple test with p-values shown_
+
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+```
+
+
+```{r, ads}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+```
+
+```{r}
+ads <- advs |>
+  subset(
+    dtype == "" & avisit == "Baseline" & paramcd %in% c("DCAL", "BMI"),
+    select = c(subjid, paramcd, aval)
+  ) |>
+  (\(x) merge(x = adsl[c("subjid", "diabcd")], y = x, by = "subjid"))() |>
+  rbind(
+    adsl |>
+      subset(select = -diab) |>
+      tidyr::pivot_longer(
+        cols = c("age", "trainn"), names_to = "paramcd", values_to = "aval"
+      )
+  )
+```
+
+```{r, extra_functions}
+format_pval <- function(x) {
+  p <- round(x, 5)
+  ifelse(
+    test = p < 0.0001,
+    yes = "<0.0001",
+    no = ifelse(
+      test = p < 0.001,
+      yes = format(round(p, 4), nsmall = 4),
+      no = ifelse(
+        test = p < 0.06,
+        yes = format(round(p, 3), nsmall = 3),
+        no = format(round(p, 2), nsmall = 2)
+      )
+    )
+  )
+}
+
+
+lm_by_paramcd <- function(x) {
+  lapply(
+    x,
+    \(x) list(data = x, lm = lm(aval ~ diabcd, data = x))
+  )
+}
+
+lsm_by_param <- function(x) {
+  lapply(
+    x,
+    \(x) {
+      mod_em <- emmeans::emmeans(x$lm, specs = ~ diabcd)
+      y <- multcomp::cld(mod_em, Letters = letters)
+      y <- as.data.frame(y)
+      cbind(
+        paramcd = unique(x$data$paramcd),
+        y,
+        diabcd_f = car::Anova(x$lm)[1, "Pr(>F)"]
+      )
+    }
+  )
+}
+
+lsm_pairs_by_param <- function(x)
+  lapply(
+    x,
+    \(x) {
+      mod_em <- emmeans::emmeans(
+        x$lm, specs = "diabcd", contr = "revpairwise"
+        )
+      y <- merge(
+        as.data.frame(mod_em$contrast)[c("contrast", "p.value")],
+        confint(mod_em)$contrasts
+      )
+      cbind(paramcd = unique(x$data$paramcd), y)
+    }
+  )
+
+```
+
+## Tab 04 01
+
+```{r}
+tab_04_01_raw <- ads |>
+  (\(x) split(x, f = x$paramcd))() |>
+  lm_by_paramcd() |>
+  lsm_by_param()  |>
+  (\(x) Reduce(rbind, x))()
+
+library(tidyr)
+tab_04_01 <- tab_04_01_raw |>
+  within({
+    val <- paste0(
+      signif(emmean, 3),
+      " (", signif(lower.CL, 3), ", ", signif(upper.CL, 3), ")"
+      )
+    pval <- format_pval(diabcd_f)
+    }) |>
+  pivot_wider(
+    id_cols = c("paramcd", "pval", "diabcd_f"),
+    values_from = "val",
+    names_from = "diabcd"
+    ) |>
+  (\(x) x[order(x$diabcd_f), ])()
+tab_04_01
+```
+
+```{r}
+library(flextable)
+tab_04_01_ft <- tab_04_01 |>
+  subset(select = -diabcd_f) |>
+  flextable() |>
+  autofit() |>
+  add_header_lines(wrap_long_lines(
+      "Analysis Set: Full Analysis Set - Observed Cases"
+    )) |>
+  set_caption(
+    caption = wrap_long_lines(
+      "Tab 04 01 - Analysis of Variance / Least Means Square estimations
+      (95% Confidence Interval) of Demographics parameter variations by
+      diabetes group at baseline"
+  )
+  ) |>
+  footnote(
+    value = as_paragraph(
+      "Note: rows are ordered by increasing p values, most significant on top."
+    ),
+    ref_symbols = ""
+  ) |>
+  footnote(
+    part = "header",
+    i = 2, j = 2,
+    value = as_paragraph(
+      "Note: pval, p value of diabetes group effect test by F test."
+    ),
+    ref_symbols = "a"
+  ) |>
+  footnote(
+    value = as_paragraph(
+      "Source: Full Analysis Set, ADSL and ADVS observed cases at baseline."
+    ),
+    ref_symbols = ""
+  ) |>
+  theme_booktabs()
+tab_04_01_ft
+```
+
+```{r}
+bnm <- "tab_04_01"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_04_01_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_04_01, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_04_01_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_04_01_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_04_01, file = ., row.names = FALSE)
+```
+
+## Tab 04 02
+
+```{r}
+tab_04_02_raw <- ads |>
+  (\(x) split(x, f = x$paramcd))() |>
+  lm_by_paramcd() |>
+  lsm_pairs_by_param()  |>
+  (\(x) Reduce(rbind, x))()
+
+library(tidyr)
+tab_04_02 <- tab_04_02_raw |>
+  subset(select = c(
+    paramcd, contrast, estimate, SE, df, p.value, lower.CL, upper.CL
+  ))
+
+library(flextable)
+tab_04_02_ft <- tab_04_02 |>
+  (\(x) split(x, f = x$paramcd))() |>
+  lapply(
+    \(x) {
+      x$p.value <- format(round(x$p.value, 5))
+      x$estimate <- format(signif(x$estimate, 5))
+      x$SE <- format(signif(x$SE, 6))
+      x$lower.CL <- format(signif(x$lower.CL, 5))
+      x$upper.CL <- format(signif(x$upper.CL, 5))
+      x
+    }) |>
+  (\(x) Reduce(rbind, x))()|>
+  flextable() |>
+  fontsize(size = 9, part = "all") |>
+  autofit() |>
+  add_header_lines(rev(c(
+    wrap_long_lines(
+      "Tab 04 02 - Post-hoc tests for the Analysis of Variance of
+      Demographics parameter variations by diabetes group at baseline"
+    )))) |>
+  footnote(
+    value = as_paragraph(wrap_long_lines(
+      "CL, 95% Confidence Limit; SE, Standard Error."
+    )),
+    ref_symbols = ""
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_long_lines(
+      "Note: P value adjustment by Tukey's method for comparing a family of
+      3 estimates."
+    )),
+    ref_symbols = ""
+  )|>
+  theme_booktabs()
+
+tab_04_02_ft
+```
+
+```{r}
+bnm <- "tab_04_02"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_04_02_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_04_02, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_04_02_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_04_02_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_04_02, file = ., row.names = FALSE)
+```
+

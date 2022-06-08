@@ -1,9 +1,15 @@
-# Preface {.unnumbered}
+---
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+---
 
-This is a Quarto book.
+# Preamble {.unnumbered}
 
-To learn more about Quarto books visit <https://quarto.org/docs/books>.
+Development version:
 
-```{r}
-1 + 1
-```
+- only the program is displayed within these pages.
+- no data is attached to the repository or displayed within the pages.
+- no output is displayed within the pages.
+
+Outputs will be included and made available within the program if the
+associated manuscript is accepted for publication in peer-review journal.

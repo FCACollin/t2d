@@ -3,20 +3,41 @@ project:
   output-dir: docs
 
 book:
-  title: "program"
-  author: "Jane Doe"
-  date: "4/12/2022"
+  title: "T2D: Exercise and Genetic Expression Profile"
+  subtitle: Program
+  author: "Francois Collin, Ph.D."
+  page-footer: "Copyright 2022, FCA Collin, Ph.D."
   chapters:
     - index.qmd
-    - intro.qmd
-    - summary.qmd
+#    - intro.qmd # deprecated
+#    - t2d_02_dmg.qmd # deprecated -> t2d_08_dmg.qmd
+    - t2d_03_bds.qmd # Missingness adlb and advs
+    - t2d_08_dmg.qmd # Demographics and anthropometrics
+    - t2d_09_chg.qmd # Change from Baseline
+#    - t2d_04_dmg.qmd # deprecated -> t2d_08_dmg.qmd
+#    - t2d_05_ath.qmd # deprecated -> t2d_08_dmg.qmd / t2d_09_chg.qmd
+    - t2d_06_rna.qmd # RNA-Seq refresher
+    - t2d_07_mir.qmd # miR DE analysis
     - references.qmd
 
 bibliography: references.bib
 
 format:
   html:
-    theme: cosmo
+    theme: litera
+    page-layout: full
+    code-fold: show
+    code-overflow: wrap
+    code-summary: "Show the code"
+    css: styles.css
+  pdf:
+    documentclass: scrreport
+    header-includes: |
+      \usepackage{makeidx}
+      \makeindex
+    include-after: |
+      \printindex
 
-editor: visual
-
+editor:
+  markdown:
+    canonical: true

@@ -1,0 +1,122 @@
+---
+title: "demographics - deprecated - won't work"
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d at %H:%M:%S (%Z)')`"
+---
+
+```{r}
+#| code-fold: show
+#| results: hold
+load("src/pkg/rpack_BESD/data/adsl.rda")
+load("src/pkg/rpack_BESD/data/advs.rda")
+
+```
+
+```{r}
+sel_var <- c("USUBJID", BASEBMI = "AVAL")
+nm <- ifelse(names(sel_var) == "", sel_var, names(sel_var))
+sel_var <- setNames(sel_var, nm = nm)
+
+anl <- subset(
+  advs,
+  PARAMCD == "BMI" & AVISIT == "BASELINE",
+  select = sel_var
+)
+colnames(anl) <- names(sel_var)
+
+anl <- merge(
+  x = adsl, all = TRUE,
+  y = anl,
+  by = attr(adsl, "key")
+)
+smry_demo <- function(adsl) {
+  y <- split(adsl, f = adsl$ARM) # nolint
+  lapply(
+    X = y,
+    FUN =  function(z) {
+      list(
+        `N` = list(value = nrow(z)),
+        `Age (Years)` = list(value = NULL, format = function(x) ""),
+        `  Mean (SD)` = list(
+          value = c(mean(z$AGE), sd(z$AGE)),
+          format = function(x)
+            paste0(signif(x[1], 2), " (", signif(x[2], 2), ")")
+          ),
+        `  Q1/Q2/Q3` = list(
+          value = quantile(z$AGE, probs = c(.25, .5, .75)),
+          format = function(x) paste(round(x, 1), collapse = "/")
+          ),
+        `BMI (Baseline)` = list(value = NULL, format = function(x) ""),
+        `  Mean (SD)` = list(
+          value = c(mean(z$BASEBMI), sd(z$BASEBMI)),
+          format = function(x)
+            paste0(signif(x[1], 2), " (", signif(x[2], 2), ")")
+          ),
+        `  Q1/Q2/Q3` = list(
+          value = quantile(z$BASEBMI, probs = c(.25, .5, .75)),
+          format = function(x) paste(round(x, 1), collapse = "/")
+          ),
+        `Trainings (number)` = list(value = NULL, format = function(x) ""),
+        `  Mean (SD)` = list(
+          value = c(mean(z$NTRAIN), sd(z$NTRAIN)),
+          format = function(x)
+            paste0(signif(x[1], 2), " (", signif(x[2], 2), ")")
+          ),
+        `  (Q1/Q2/Q3)` = list(
+          value = quantile(z$NTRAIN, probs = c(.25, .5, .75)),
+          format = function(x) paste(round(x, 1), collapse = "/")
+        )
+      )
+    }
+  )
+}
+
+tbl_demo <- function(adsl) {
+  y <- smry_demo(adsl)
+  y <- sapply(
+    y,
+    function(x) {
+      sapply(x, function(y) {
+        if (is.null(y$format)) {
+          paste(signif(y$value, 3), collapse = ", ") # nolint
+        } else {
+          y$format(y$value) # nolint
+        }
+      })
+    }
+  )
+  y <- cbind(
+    Stat = rownames(y),
+    as.data.frame(y)
+  )
+  rownames(y) <- NULL
+  y
+}
+
+res <- tbl_demo(anl)
+attr(res, "metadata") <- data.frame(
+    name = "Demographics description.",
+    date = Sys.Date(),
+    readFile = paste(
+      "File Encoding UTF8, semi-colon as column separator",
+      "and dots for decimals.",
+      sep = "\n"
+      ),
+    caption = paste(
+      "Description of the analysis arms. Study arms were displayed in",
+      "columns, values displayed as \"Mean (SD)\" unless otherwise specified.",
+      sep = "\n"
+      ),
+    `data source` = "ADSL",
+    key = "One record per Statistics (row) and per study arm (columns)."
+  )
+
+rm(sel_var, nm, anl)
+```
+
+```{r}
+knitr::kable(
+  res,
+  caption = paste0("\\label{Tab001}", attr(res, "metadata")$caption)
+)
+```
