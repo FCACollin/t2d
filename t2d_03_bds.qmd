@@ -1,0 +1,41 @@
+---
+title: "Missingness in adlb and advs"
+subtitle: Program 03
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+---
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = params$knitr$results)
+```
+
+
+```{r, ads}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+```
+
+```{r, fig_001}
+#| fig-width: 8
+library(ggplot2)
+gg <- rbind(adlb, advs) |>
+  ggplot(aes(subjid, paramcd, fill = dtype)) +
+  scale_fill_manual(values = c("gray", "orange")) +
+  geom_tile(color = "gray50") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r, fig_001_render, eval=params$knitr$results!="hide"}
+gg
+```
+
+
+
+

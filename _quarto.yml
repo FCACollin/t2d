@@ -9,9 +9,15 @@ book:
   page-footer: "Copyright 2022, FCA Collin, Ph.D."
   chapters:
     - index.qmd
-    - intro.qmd
-    - t2d_01_dmg.qmd
-    - t2d_02_dmg.qmd
+#    - intro.qmd # deprecated
+#    - t2d_02_dmg.qmd # deprecated -> t2d_08_dmg.qmd
+    - t2d_03_bds.qmd # Missingness adlb and advs
+    - t2d_08_dmg.qmd # Demographics and anthropometrics
+    - t2d_09_chg.qmd # Change from Baseline
+#    - t2d_04_dmg.qmd # deprecated -> t2d_08_dmg.qmd
+#    - t2d_05_ath.qmd # deprecated -> t2d_08_dmg.qmd / t2d_09_chg.qmd
+    - t2d_06_rna.qmd # RNA-Seq refresher
+    - t2d_07_mir.qmd # miR DE analysis
     - references.qmd
 
 bibliography: references.bib
@@ -23,6 +29,7 @@ format:
     code-fold: show
     code-overflow: wrap
     code-summary: "Show the code"
+    css: styles.css
   pdf:
     documentclass: scrreport
     header-includes: |
@@ -31,4 +38,6 @@ format:
     include-after: |
       \printindex
 
-editor: visual
+editor:
+  markdown:
+    canonical: true

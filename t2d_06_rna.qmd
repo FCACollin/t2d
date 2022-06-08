@@ -1,0 +1,483 @@
+---
+title: "RNASeq - Refresher"
+subtitle: Program 06
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+---
+
+
+## RNA Seq - Local Study of Confounder Adjustment's Impact
+
+Target:
+
+- [x] refresh the differential expression analysis technics with DESeq2.
+- [x] upgrade environment for differential expression analysis.
+- [x] evaluate the impact of confounder adjustment on a specific use case:
+  compare miRNA expression between T2D and NGT at baseline.
+
+
+```{r, settings}
+params <- if (exists("params")) {
+  c(params, yaml::read_yaml("_prog.yml"))
+} else {
+  yaml::read_yaml("_prog.yml")
+}
+
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = params$knitr$results)
+
+library(assertthat)
+source("R/ngs.R")
+```
+
+### Data preparation
+
+```{r, ads}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+
+#' Subjid and Visit to Sample
+#' 
+subjvis_to_spl <- function(df) paste0(df$subjid, "v", df$avisitn)
+
+ads <- adlb |>
+  subset(
+    paramcd %in% c(
+      "CHOL", "HBA1C", "HDL", "HOMAB", "HOMAIR", "LDL", "MATSUDA", "TRIG"
+    )
+  ) %>%
+  rbind(advs) |>
+  subset(select = -c(ct, dtype, param, base, basetype, chg, pchg)) |>
+  tidyr::pivot_wider(names_from = "paramcd", values_from = "aval") |>
+  (\(df) merge(adsl, df, by = "subjid"))() |>
+  (\(df) S4Vectors::DataFrame(df, row.names = subjvis_to_spl(df)))() |>
+  (\(df) {
+    assertthat::assert_that(all(table(subjvis_to_spl(df)) == 1))
+    df
+  })()
+
+ads
+```
+
+
+```{r, rna}
+rna <- list(# There will be mi-RNA data.
+  mrna = dbs.data::mrna_raw,
+  premirna = dbs.data::premirna_raw,
+  mirna = dbs.data::mirna_raw
+)
+
+rna[c("premirna", "mirna")] <- lapply(
+  X = rna[c("premirna", "mirna")],
+  FUN = format_mirna
+)
+
+# Rows represent genes.
+rna <- lapply(X = rna, FUN = function(x) y <- x[rowSums(x) > 0, ])
+rna <- lapply(X = rna, as.matrix)
+assertthat::assert_that(all(colnames(rna$premirna) == colnames(rna$mirna)))
+rna$allmirna <- rbind(rna$premirna, rna$mirna)
+library(testthat)
+test_that("rna features discriminated in noexpr, expr", {
+  lapply(
+    X = rna,
+    FUN = function(x) expect_true(all(rowSums(x) > 0))
+  )
+})
+```
+
+```{r, mae}
+library(MultiAssayExperiment)
+
+#' (Sample-)Map Arrays
+#'
+#' Use the colnames of `x` to deduce the `primary` and `colnames`.
+#' This is used to generate the sample mapping between colData and Experiments.
+#'
+#' @param x (`dataframe`).
+#'
+#' @note In our case, primary and colnames are equivalent, colnames could
+#' be different from primary names when a biological sample has different
+#' names in the biological assays (e.g. machine constraint, technical
+#' repetitions).
+#'
+#' @seealso [MultiAssayExperiment::listToMap()]
+#' @examples
+#' \dontrun{
+#' lapply(rna, map_arrays)
+#' MultiAssayExperiment::listToMap(lapply(rna, map_arrays))
+#' }
+#'
+map_arrays <- function(x) {
+  y <- data.frame(colname = colnames(x))
+  y$primary <- y$colname
+  y
+}
+
+besd_mae <- MultiAssayExperiment(
+  experiments = ExperimentList(rna),
+  colData = ads,
+  sampleMap = listToMap(lapply(rna, map_arrays))
+)
+
+besd_mae
+```
+
+## DE: Baseline, all micro RNA, no confounding factor (`dds_1`)
+
+```{r, dds_1}
+ctrl <- yaml::read_yaml("_prog.yml")$rna
+
+ngs_assay <- "allmirna"
+
+filter_for_depth <- function(mae, assay, depth_threshold) {
+  mae[, colSums(mae[[ngs_assay]]) > depth_threshold, ]
+}
+
+filter_for_visit <- function(mae, visit) {
+  mae[, colData(mae)$avisit == visit, ]
+}
+
+filter_for_low_expr <- function(mae, assay, cpm_threshold, frac_cols = 1 / 2) {
+  # Genes expressed at least cpm_threshold in frac_cols columns
+  mae[
+    rowSums(cpm(mae[[assay]]) > cpm_threshold) >
+      ncol(mae[[assay]]) * frac_cols,
+    ,
+  ]
+}
+
+ads <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth("allmirna", ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Baseline") |>
+  filter_for_low_expr("allmirna", ctrl$cpm_threshold[[ngs_assay]])
+
+ads
+
+dds_1 <- DESeq2::DESeqDataSetFromMatrix(
+  countData = ads[[ngs_assay]],
+  colData = colData(ads),
+  design = stats::formula(~ diabcd)
+)
+
+dds_1_res <- DESeq2::DESeq(
+  object = dds_1,
+  quiet = FALSE, # default: FALSE
+  minReplicatesForReplace = 7, # default: 7
+  useT = FALSE, # default: FALSE
+  minmu = 0.5, # default: 0.5
+  parallel = TRUE,
+  BPPARAM = BiocParallel::bpparam()
+)
+
+dds_1_de <- DESeq2::results(
+  dds_1_res,
+  contrast = c("diabcd", test = "T2D", ref = "NGT"),
+  pAdjustMethod = ctrl$adj_meth
+) |>
+  (\(df) {
+    df$feature <- rownames(df)
+    df
+  }) () |>
+  within(log_padj <- -1 * log10(padj))
+
+library(ggplot2)
+dds_1_gg <-
+  dds_1_de |> as.data.frame() |>
+  ggplot(mapping = aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_hline(yintercept = -1 * log10(c(0.05, 0.001)), lty = 2, lwd = .5) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.05),
+    label = "p = 0.05",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.001),
+    label = "p = 0.001",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  theme_minimal() +
+  theme(legend.position = "bottom", asp = 2 / 3)
+```
+
+
+```{r, dds_1_render, eval=params$knitr$results!="hide"}
+dds_1_gg
+```
+
+
+## DE: Baseline, all micro RNA, accounting for Age, BMI, DCAL, Trainn (`dds_2`)
+
+```{r, dds_2}
+ctrl <- yaml::read_yaml("_prog.yml")$rna
+
+ngs_assay <- "allmirna"
+
+filter_for_depth <- function(mae, assay, depth_threshold) {
+  mae[, colSums(mae[[ngs_assay]]) > depth_threshold, ]
+}
+
+filter_for_visit <- function(mae, visit) {
+  mae[, colData(mae)$avisit == visit, ]
+}
+
+filter_for_low_expr <- function(mae, assay, cpm_threshold, frac_cols = 1 / 2) {
+  # Genes expressed at least cpm_threshold in frac_cols columns
+  mae[
+    rowSums(cpm(mae[[assay]]) > cpm_threshold) >
+      ncol(mae[[assay]]) * frac_cols,
+    ,
+  ]
+}
+
+scale_confounder <- function(mae, confounder) {
+  for (i in seq_along(confounder)) {
+    cfd <- confounder[i]
+    colData(mae)[cfd] <- scale(colData(mae)[cfd])
+  }
+  mae
+}
+ads <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth("allmirna", ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Baseline") |>
+  filter_for_low_expr("allmirna", ctrl$cpm_threshold[[ngs_assay]]) |>
+  scale_confounder(confounder = c("age", "trainn", "BMI", "DCAL"))
+ads
+
+dds_2 <- DESeq2::DESeqDataSetFromMatrix(
+  countData = ads[[ngs_assay]],
+  colData = colData(ads),
+  design = stats::formula(~ age + BMI + trainn + DCAL + diabcd)
+)
+
+dds_2_res <- DESeq2::DESeq(
+  object = dds_2,
+  quiet = FALSE, # default: FALSE
+  minReplicatesForReplace = 7, # default: 7
+  useT = FALSE, # default: FALSE
+  minmu = 0.5, # default: 0.5
+  parallel = TRUE,
+  BPPARAM = BiocParallel::bpparam()
+)
+
+dds_2_de <- DESeq2::results(
+  dds_2_res,
+  contrast = c("diabcd", test = "T2D", ref = "NGT"),
+  pAdjustMethod = ctrl$adj_meth
+) |>
+  (\(df) {
+    df$feature <- rownames(df)
+    df
+  }) () |>
+  within(log_padj <- -1 * log10(padj))
+
+library(ggplot2)
+dds_2_gg <-
+  dds_2_de |> as.data.frame() |>
+  ggplot(mapping = aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_hline(yintercept = -1 * log10(c(0.05, 0.001)), lty = 2, lwd = .5) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.05),
+    label = "p = 0.05",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.001),
+    label = "p = 0.001",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  theme_minimal() +
+  theme(legend.position = "bottom", asp = 2 / 3)
+```
+
+
+```{r, dds_2_render, eval=params$knitr$results!="hide"}
+dds_2_gg
+```
+
+## Comparison with/without confounding factors
+
+```{r, graph_comp}
+theme_fun <- function(...) {
+  theme_minimal() +
+    theme(
+      title = element_text(size = 9),
+      text = element_text(size = 9)
+    ) +
+    theme(...)
+}
+
+gg_1_2 <- rbind(
+  within(as.data.frame(dds_1_de), facet <- "No confounding factors"),
+  within(as.data.frame(dds_2_de), facet <- "~Age + BMI + DCAL + Train")
+) |>
+  ggplot(mapping = aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_hline(yintercept = -1 * log10(c(0.05, 0.001)), lty = 2, lwd = .5) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.05),
+    label = "p = 0.05",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.001),
+    label = "p = 0.001",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  facet_wrap(facet ~ ., ncol = 2) +
+  theme_fun(
+    legend.position = "bottom"
+  ) +
+  theme(
+    legend.key.width = unit(5, "lines"),
+    legend.key.height = unit(.8, "lines")
+  )
+
+res <- merge(
+  as.data.frame(dds_1_de),
+  as.data.frame(dds_2_de),
+  by = "feature",
+  all = TRUE,
+  suffixes = c(".asis", ".cfd")
+)
+
+
+fun_label <- function(df,
+                      x = "log2FoldChange.asis",
+                      y = "log2FoldChange.cfd") {
+  cor_fun <- function(meth = "pearson") {
+    round(cor(df[[x]], df[[y]], method = meth), 2)
+  }
+  paste0(
+    "atop(",
+    "r == ", cor_fun(), ",",
+    "rho == ", cor_fun("spearman"),
+    ")"
+  )
+}
+
+lim <- range(unlist(res[c("log2FoldChange.asis", "log2FoldChange.cfd")]))
+gg_cor_lfc <- ggplot(res, aes(log2FoldChange.asis, log2FoldChange.cfd)) +
+  geom_hex() +
+  scale_fill_viridis_c(option = "F", begin = .1, end = .9) +
+  geom_abline(slope = 1, intercept = 0, col = "red") +
+  annotate(
+    "label", x = -Inf, y = Inf, hjust = 0, vjust = 1,
+    label = fun_label(res),
+    parse = TRUE,
+    family = "mono",
+    size = 3
+  )+
+  coord_cartesian(xlim = lim, ylim = lim) +
+  labs(
+    title = "Log Fold Change (LFC)",
+    subtitle = "With / Without Adjustment for Confounding Factors",
+    x = "No Adjustment",
+    y = "Adjusted for Confounding Factors"
+  ) +
+  theme_fun(asp = 1)
+
+lim <- range(unlist(res[c("log_padj.asis", "log_padj.cfd")]))
+gg_cor_pval <- ggplot(res, aes(log_padj.asis, log_padj.cfd)) +
+  geom_hex() +
+  scale_fill_viridis_c(option = "D", begin = .1, end = .9) +
+  geom_abline(slope = 1, intercept = 0, col = "green2") +
+  annotate(
+    "label", x = -Inf, y = Inf, hjust = 0, vjust = 1,
+    label = fun_label(res, "log_padj.asis", "log_padj.cfd"),
+    parse = TRUE,
+    family = "mono",
+    size = 3
+  )+
+  coord_cartesian(xlim = lim, ylim = lim, clip = "off") +
+  labs(
+    title = expression("Significance: "*-1 %.% log10(padj)),
+    subtitle = "With / Without Adjustment for Confounding Factors",
+    x = "No Adjustment",
+    y = "Adjusted for Confounding Factors"
+  ) +
+  theme_fun(asp = 1)
+
+library(cowplot)
+p <- plot_grid(
+  plot_grid(gg_1_2) + theme(plot.background = element_rect(color = "black")),
+  plot_grid(
+    plot_grid(gg_cor_lfc) +
+      theme(plot.background = element_rect(color = "black")),
+    plot_grid(gg_cor_pval) +
+      theme(plot.background = element_rect(color = "black")),
+    labels = c("B", "C")
+  ),
+  ncol = 1, rel_heights = c(3, 2),
+  labels = c("A", NA)
+)
+
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 1",
+      strwrap(
+        "Volcano plot - Level and significance of Differential Expression among
+        all miRNA at Baseline between T2D and NGT", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_note(c(
+    "A: Left panel accounts for Age, BMI, DCAL (diet) and number of trainings in
+    the estimation and test of the differential expression of every gene; it
+    may present marginal differences with the version presented 2 years ago
+    likely due to slight variations in stochastic elements (e.g. missing
+    data imputation).",
+    "A: Right panel discards any confounding factors.",
+    "B, C: Scatter plots comparing
+    the Log Fold Change estimations (B)/
+    the significance (C, the higher the more significant)
+    with (y axis) without (x axis) adjustment for confounding factors with
+    annotation corresponding to the Pearson's correlation (r) and
+    Spearman's rank correlation (rho).",
+    "Hexbin representation: the intensity of each hexagonal bin accounts for
+    the number of genes found in the area it covers."
+  )) |>
+  add_figure(p, height = .9) |>
+  add_footer(
+    "Program t2d_06_rna / Env ayup_dbs:v0.1.0-alpha",
+    params$version
+  )
+
+export_as(
+  p,
+  file = file.path(params$paths$grh, "fig_06_01.pdf"),
+  file_graph_alone = file.path(params$paths$grh, "fig_06_01_af.pdf")
+)
+```
+
+
+```{r, graph_comp_render, eval=params$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+
+show_slate(p)
+```

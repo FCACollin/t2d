@@ -1,5 +1,5 @@
 ---
-title: "demographics"
+title: "demographics - deprecated - won't work"
 author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d at %H:%M:%S (%Z)')`"
 ---

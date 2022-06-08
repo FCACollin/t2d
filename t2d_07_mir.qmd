@@ -1,0 +1,266 @@
+---
+title: "micro RNA"
+subtitle: Program 07
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+---
+
+
+## miRNA Seq - Differential expression analysis
+
+Target:
+
+- [x] miRNA DE at baseline without confounding factors.
+
+
+```{r, settings}
+params <- if (exists("params")) {
+  c(params, yaml::read_yaml("_prog.yml"))
+} else {
+  yaml::read_yaml("_prog.yml")
+}
+
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+library(assertthat)
+source("R/ngs.R")
+```
+
+### Data preparation
+
+```{r, ads}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+
+#' Subjid and Visit to Sample
+#' 
+subjvis_to_spl <- function(df) paste0(df$subjid, "v", df$avisitn)
+
+ads <- adlb |>
+  subset(
+    paramcd %in% c(
+      "CHOL", "HBA1C", "HDL", "HOMAB", "HOMAIR", "LDL", "MATSUDA", "TRIG"
+    )
+  ) %>%
+  rbind(advs) |>
+  subset(select = -c(ct, dtype, param, base, basetype, chg, pchg)) |>
+  tidyr::pivot_wider(names_from = "paramcd", values_from = "aval") |>
+  (\(df) merge(adsl, df, by = "subjid"))() |>
+  (\(df) S4Vectors::DataFrame(df, row.names = subjvis_to_spl(df)))() |>
+  (\(df) {
+    assertthat::assert_that(all(table(subjvis_to_spl(df)) == 1))
+    df
+  })()
+
+ads
+```
+
+
+```{r, rna}
+rna <- list(
+  mrna = dbs.data::mrna_raw,
+  premirna = dbs.data::premirna_raw,
+  mirna = dbs.data::mirna_raw
+)
+
+rna[c("premirna", "mirna")] <- lapply(
+  X = rna[c("premirna", "mirna")],
+  FUN = format_mirna
+)
+
+# Rows represent genes.
+rna <- lapply(X = rna, FUN = function(x) y <- x[rowSums(x) > 0, ])
+rna <- lapply(X = rna, as.matrix)
+assertthat::assert_that(all(colnames(rna$premirna) == colnames(rna$mirna)))
+rna$allmirna <- rbind(rna$premirna, rna$mirna)
+library(testthat)
+test_that("rna features discriminated in noexpr, expr", {
+  lapply(
+    X = rna,
+    FUN = function(x) expect_true(all(rowSums(x) > 0))
+  )
+})
+```
+
+```{r, mae}
+library(MultiAssayExperiment)
+
+#' (Sample-)Map Arrays
+#'
+#' Use the colnames of `x` to deduce the `primary` and `colnames`.
+#' This is used to generate the sample mapping between colData and Experiments.
+#'
+#' @param x (`dataframe`).
+#'
+#' @note In our case, primary and colnames are equivalent, colnames could
+#' be different from primary names when a biological sample has different
+#' names in the biological assays (e.g. machine constraint, technical
+#' repetitions).
+#'
+#' @seealso [MultiAssayExperiment::listToMap()]
+#' @examples
+#' \dontrun{
+#' lapply(rna, map_arrays)
+#' MultiAssayExperiment::listToMap(lapply(rna, map_arrays))
+#' }
+#'
+map_arrays <- function(x) {
+  y <- data.frame(colname = colnames(x))
+  y$primary <- y$colname
+  y
+}
+
+besd_mae <- MultiAssayExperiment(
+  experiments = ExperimentList(rna),
+  colData = ads,
+  sampleMap = listToMap(lapply(rna, map_arrays))
+)
+
+besd_mae
+```
+
+## `dds_1` - DE: Baseline, all micro RNA
+
+```{r, dds_1_dta}
+ctrl <- yaml::read_yaml("_prog.yml")$rna
+
+ngs_assay <- "allmirna"
+
+filter_for_depth <- function(mae, assay, depth_threshold) {
+  mae[, colSums(mae[[ngs_assay]]) > depth_threshold, ]
+}
+
+filter_for_visit <- function(mae, visit) {
+  mae[, colData(mae)$avisit == visit, ]
+}
+
+filter_for_low_expr <- function(mae, assay, cpm_threshold, frac_cols = 1 / 2) {
+  # Genes expressed at least cpm_threshold in frac_cols columns
+  mae[
+    rowSums(cpm(mae[[assay]]) > cpm_threshold) >
+      ncol(mae[[assay]]) * frac_cols,
+    ,
+  ]
+}
+
+ads <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth("allmirna", ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Baseline") |>
+  filter_for_low_expr("allmirna", ctrl$cpm_threshold[[ngs_assay]])
+
+ads
+
+dds_1_dta <- DESeq2::DESeqDataSetFromMatrix(
+  countData = ads[[ngs_assay]],
+  colData = colData(ads),
+  design = stats::formula(~ diabcd)
+)
+```
+
+
+```{r, dds_1_fit}
+dds_1_fit <- DESeq2::DESeq(
+  object = dds_1_dta,
+  quiet = FALSE, # default: FALSE
+  minReplicatesForReplace = 7, # default: 7
+  useT = FALSE, # default: FALSE
+  minmu = 0.5, # default: 0.5
+  parallel = TRUE,
+  BPPARAM = BiocParallel::bpparam()
+)
+```
+
+
+```{r, dds_1_est}
+de_by_ctrs <- function(df,
+                       ctrs,
+                       adj_meth = ctrl$adj_meth) {
+  lapply(
+    ctrs,
+    fit = df,
+    adj_meth = adj_meth,
+    FUN = function(x, fit, adj_meth) {
+      y <- DESeq2::results(fit, contrast = x, pAdjustMethod = adj_meth)
+      y$feature <- rownames(y)
+      y$log_padj <- -1 * log10(y$padj)
+      y$ctrs <- paste(x["test"], "vs", x["ref"])
+      as.data.frame(y)
+    }
+  )
+}
+dds_1_est <-
+  dds_1_fit |>
+  de_by_ctrs(
+    ctrs = list(
+      c("diabcd", test = "T2D", ref = "NGT"),
+      c("diabcd", test = "T2D", ref = "IGT"),
+      c("diabcd", test = "IGT", ref = "NGT")
+    )
+  ) |>
+  (\(x) Reduce(rbind, x))()
+```
+
+
+```{r, dds_1_gg}
+library(ggplot2)
+dds_1_gg <-
+  dds_1_est |>
+  ggplot(mapping = aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_hline(yintercept = -1 * log10(c(0.05, 0.001)), lty = 2, lwd = .5) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.05),
+    label = "p = 0.05",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  annotate(
+    geom  = "label", x = -Inf, y = -1 * log10(0.001),
+    label = "p = 0.001",
+    fill = "white", hjust = "left", size = 2, alpha = 1
+  ) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+    facet_grid(. ~ ctrs) +
+  theme_minimal() +
+  theme(legend.position = "bottom", asp = 2 / 3)
+```
+
+```{r, dds_1_an}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 1",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among all miRNA at Baseline", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_1_gg, height = .9) |>
+  add_footer(
+    "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+    params$version
+  )
+```
+
+```{r, dds_1_xp}
+export_as(
+  p,
+  file = file.path(params$paths$grh, "fig_07_01.pdf"),
+  file_graph_alone = file.path(params$paths$grh, "fig_07_01_af.pdf")
+)
+```
+
+```{r, dds_1_sh, eval=params$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+

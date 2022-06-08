@@ -1,9 +1,15 @@
 ---
-date: "`r format(Sys.time(), '%Y-%m-%d at %H:%M:%S (%Z)')`"
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
 ---
 
 # Preamble {.unnumbered}
 
-Program
+Development version:
 
+- only the program is displayed within these pages.
+- no data is attached to the repository or displayed within the pages.
+- no output is displayed within the pages.
 
+Outputs will be included and made available within the program if the
+associated manuscript is accepted for publication in peer-review journal.

@@ -1,5 +1,5 @@
 ---
-title: "micro-RNA: demographics"
+title: "micro-RNA: demographics  - deprecated"
 author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d at %H:%M:%S (%Z)')`"
 bibliography: references.bib
@@ -24,67 +24,41 @@ square estimates so as to:
 params <- yaml::read_yaml("_prog.yml")
 devtools::load_all("src/pkg/dbs.data")
 devtools::load_all("src/pkg/latarnia.utils")
-# wrap_lines <- function(x) {
-#   y <- strwrap(x, width = 80)
-#   paste(y, collapse = " ")
-# }
-#' @examples
-#' wrap_lines(
-#'   "add footnotes to a flextable object. A symbol is appened where the footnote
-#'   is defined and the note is appened in the footer part of the table."
-#' )
 ```
 
 ```{r, ads}
 #| code-fold: show
 
-key_is_unique <- function(x) all(table(x) == 1L)
-library(dplyr)
-library(assertthat)
-
-clindata <- "extdata/miRNA/ClinicalData_190910.csv" |>
-  read.table(
-    sep = ";",
-    header = TRUE,
-    na.strings = "NA",
-    stringsAsFactors = FALSE,
-    skip = 11
-  ) |>
-  as_tibble() |>
-  rename(
-    subjid = P,
-    diab = D,
-    trainn = n_train,
-    grp = G
-  ) |>
-  within(expr = {
-    diab <- factor(diab)
-    subjid <- factor(subjid)
-    grp <- factor(grp)
-  })
-
 adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+
 adsl |> head() |> knitr::kable(caption = "Outlook ADSL")
-
-advst <- clindata |>
-  rename(bmi = BMI) |>
-  select(subjid, diab, grp, bmi, kcal)
-
-advst |> head() |> knitr::kable(caption = "Outlook ADVST")
+advs |> head() |> knitr::kable(caption = "Outlook ADVS")
 ```
 
 @Szczerbinski2022
 
+## Table 02 01
+
 ```{r, t_02_01}
+library(tidyr)
+ads <- advs |>
+  subset(
+    dtype == "" & paramcd %in% c("BMI", "DCAL"),
+    select = c(subjid, avisitn, avisit, paramcd, aval)
+  ) |>
+  pivot_wider(names_from = paramcd, values_from = aval) |>
+  merge(adsl)
+
 library(lme4)
-mod_age <- lm(age ~ diab, data = adsl)
-mod_train <- lm(trainn ~ diab, data = adsl)
+mod_age <- lm(age ~ diabcd, data = adsl)
+mod_train <- lm(trainn ~ diabcd, data = adsl)
 
-mod_bmi_int <- lmer(bmi ~ diab * grp + (1 | subjid), data = advst)
-mod_bmi <- lmer(bmi ~ diab + grp + (1 | subjid), data = advst)
+mod_bmi_int <- lmer(BMI ~ diabcd * avisit + (1 | subjid), data = ads)
+mod_bmi <- lmer(BMI ~ diabcd + avisit + (1 | subjid), data = ads)
 
-mod_kcal_int <- lmer(kcal ~ diab * grp + (1 | subjid), data = advst)
-mod_kcal <- res2 <- lmer(kcal ~ diab + grp + (1 | subjid), data = advst)
+mod_DCAL_int <- lmer(DCAL ~ diabcd * avisit + (1 | subjid), data = ads)
+mod_DCAL <- res2 <- lmer(DCAL ~ diabcd + avisit + (1 | subjid), data = ads)
 
 pval_format <- function(x, nm) as_tibble(x)
 pval <- function(x, ...) UseMethod("pval", x)
@@ -107,9 +81,9 @@ pval.lmerMod <- function(x, lrt, ...) {
 #' pval(mod_age)
 #' pval(mod_train)
 #' pval(mod_bmi, mod_bmi_int)
-#' pval(mod_kcal, mod_kcal_int)
+#' pval(mod_DCAL, mod_DCAL_int)
 
-lms <- function(x, specs = ~diab) {
+lms <- function(x, specs = ~diabcd) {
   eff_nm <- as.character(rev(specs)[[1]])
   y <- emmeans::emmeans(x, specs = specs)
   y <- as.data.frame(y)
@@ -117,27 +91,27 @@ lms <- function(x, specs = ~diab) {
   y <- y[c(eff_nm[eff_nm %in% names(y)], emm_nm)]
   tidyr::pivot_wider(
     y,
-    names_from = "diab",
+    names_from = "diabcd",
     values_from = all_of(emm_nm)
   )
 }
 
 #' @examples
-#' lms(mod_age, ~diab)
-#' lms(mod_bmi, ~diab|grp)
+#' lms(mod_age, ~diabcd)
+#' lms(mod_bmi, ~diabcd|avisit)
 
 eff_pval <- function(x, specs, x2 = NULL) {
   eff <- lms(x, specs)
   p <- pval(x, x2)
   names(p) <- c(
-    diab = "p (D)",
-    grp = "p (E)",
+    diabcd = "p (D)",
+    avisit = "p (E)",
     lrt = "p (DxE)"
   )[names(p)]
-  
+
   cbind(
     var = all.vars(terms(x))[[1]],
-    union_all(eff, p)
+    dplyr::union_all(eff, p)
   )
 }
 
@@ -163,78 +137,78 @@ format_rows <- function(df, digits = 1)
   tibble(
     Variable = df$var,
     stat = df$stat,
-    group = df$grp,
-    D0 = format_mean_ci(df$emmean_D0, df$lower.CL_D0, df$upper.CL_D0, digits),
-    D1 = format_mean_ci(df$emmean_D1, df$lower.CL_D1, df$upper.CL_D1, digits),
-    D2 = format_mean_ci(df$emmean_D2, df$lower.CL_D2, df$upper.CL_D2, digits),
+    group = df$avisit,
+    NGT = format_mean_ci(df$emmean_NGT, df$lower.CL_NGT, df$upper.CL_NGT, digits),
+    IGT = format_mean_ci(df$emmean_IGT, df$lower.CL_IGT, df$upper.CL_IGT, digits),
+    T2D = format_mean_ci(df$emmean_T2D, df$lower.CL_T2D, df$upper.CL_T2D, digits),
     `p (D)` = format_pval(df$`p (D)`),
     `p (E)` = format_pval(df$`p (E)`),
     `p (DxE)` = format_pval(df$`p (DxE)`)
   )
 
 tbl <- Reduce(
-  union_all,
+  dplyr::union_all,
   list(
-    eff_pval(mod_age, ~diab),
-    eff_pval(mod_train, ~diab),
-    eff_pval(mod_bmi, ~diab|grp, mod_bmi_int),
-    eff_pval(mod_kcal, ~diab|grp, mod_kcal_int)
+    eff_pval(mod_age, ~diabcd),
+    eff_pval(mod_train, ~diabcd),
+    eff_pval(mod_bmi, ~diabcd|avisit, mod_bmi_int),
+    eff_pval(mod_DCAL, ~diabcd|avisit, mod_DCAL_int)
   )
 ) |>
   within(expr = {
     stat <- factor(
-      is.na(emmean_D0),
+      is.na(emmean_NGT),
       levels = c("TRUE", "FALSE"),
       labels = c("Test", "Estimate")
     )
-    grp <- factor(
-      grp,
+    avisit <- factor(
+      avisit,
       levels = c(" ", "0_before", "1_after"),
       labels = c(" ", "Before exercise:", "After exercise:")
     )
-    grp[is.na(grp)] <- " "
+    avisit[is.na(avisit)] <- " "
     var <- factor(
       var,
-      levels = c("age", "trainn", "bmi", "kcal"),
+      levels = c("age", "trainn", "BMI", "DCAL"),
       labels = c("Age", "train", "BMI", "Diet")
     )
   }) |>
-  (function(df) df[order(df$var, df$grp, is.na(df$`p (D)`)), ])() |>
-  (function(df) split(df, f = df$var))() |>
+  (\(df) df[order(df$var, df$avisit, is.na(df$`p (D)`)), ])() |>
+  (\(df) split(df, f = df$var))() |>
   lapply(
-    FUN = function(x) {
+    FUN = \(x) {
       switch(unique(as.character(x$var)),
              Diet = format_rows(x, digits = 0),
              format_rows(x, digits = 1)
       )
     }) |>
-  bind_rows()
+  dplyr::bind_rows()
 
 library(flextable)
 flextable::init_flextable_defaults()
 
 tbl_ft <- tbl |>
   within(Variable <- as.character(Variable))|>
-  bind_rows() |>
+  dplyr::bind_rows() |>
   as_grouped_data(groups = "Variable") |>
   flextable() |>
   autofit() |>
   footnote(
-    j = 6, part = "header",
+    j = 7, part = "header",
     value = as_paragraph(wrap_long_lines(
       "Differences among the groups (independently from the exercise)"
     )),
     ref_symbols = "a"
   ) |>
   footnote(
-    j = 7, part = "header",
+    j = 8, part = "header",
     value = as_paragraph(wrap_long_lines(
       "Differences linked to the exercise (independently from the group)"
     )),
     ref_symbols = "b"
   ) |>
   footnote(
-    j = 8, part = "header",
+    j = 9, part = "header",
     value = as_paragraph(wrap_long_lines(
       "Interaction tested by Likelyhood Ratio Test (LRT)."
     )),
@@ -242,7 +216,7 @@ tbl_ft <- tbl |>
   ) |>
   footnote(
     value = as_paragraph(wrap_long_lines(
-      "Note: Least means square estimations acounts for diabetes effect for
+      "Note: Least means square estimations acounts for diabcdetes effect for
       all variables. For variables BMI and Diet, estimations include the
       additive effect of the exercise; however, the LRT excluded any
       significant interaction, no interaction effect was accounted for in the
@@ -250,9 +224,14 @@ tbl_ft <- tbl |>
     )),
     ref_symbols = ""
   ) |>
+  add_header_lines(wrap_long_lines(
+      "Analysis Set: Full Analysis Set - Observed Cases"
+    )) |>
   set_caption(
-    caption = "Least Means Square estimations of Age, number of trainings,
-    BMI and diet by Diabetes group and exercise along with effect tests."
+    caption = wrap_long_lines(
+      "Tab 02 01 - Least Means Square estimations of Age, number of trainings,
+    BMI and diet by diabetes group and exercise along with effect tests."
+    )
   ) |>
   theme_booktabs()
 
@@ -281,4 +260,5 @@ file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
 file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
   message("[output] Table saved as ", .) %>%
   write.csv(tbl, file = ., row.names = FALSE)
+
 ```

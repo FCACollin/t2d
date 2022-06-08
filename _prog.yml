@@ -1,4 +1,23 @@
+
+version: 0.1.0-alpha
+knitr:
+  results: hide # markup, asis, hold, hide
 paths:
   tlg: ../tlg
   tab: ../tlg/tables
+  grh: ../tlg/graph
   dta: ../data
+rna:
+  adj_meth: "BH"
+  biomart:
+    biomart: "ENSEMBL_MART_ENSEMBL"
+    host: "jul2019.archive.ensembl.org"
+    dataset: "hsapiens_gene_ensembl"
+  cpm_threshold:
+    mrna: 2
+    allmirna: 2
+  depth_threshold:
+    mrna: 15000000
+    allmirna: 5000000
+  mingeneinset_gsea: 3
+  n_rand_gsea: 1e4
