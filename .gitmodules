@@ -1,6 +1,3 @@
 [submodule "src/pkg/latarnia.utils"]
 	path = src/pkg/latarnia.utils
 	url = /home/fcollin/Documents/praca/latarnia/P07_RRMS/P07_N03_NMOSD/libs/latarnia.utils
-[submodule "src/pkg/dbs.data"]
-	path = src/pkg/dbs.data
-	url = /home/fcollin/Documents/praca/latarnia/p11_diabetes/p11_k04_diabetes/libs/dbs.data
