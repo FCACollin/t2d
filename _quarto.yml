@@ -6,6 +6,8 @@ book:
   title: "T2D: Exercise and Genetic Expression Profile"
   subtitle: Program
   author: "Francois Collin, Ph.D."
+  repo-url: https://github.com/FCACollin/t2d
+  repo-actions: [edit]
   page-footer: "Copyright 2022, FCA Collin, Ph.D."
   chapters:
     - index.qmd
@@ -18,18 +20,29 @@ book:
 #    - t2d_05_ath.qmd # deprecated -> t2d_08_dmg.qmd / t2d_09_chg.qmd
     - t2d_06_rna.qmd # RNA-Seq refresher
     - t2d_07_mir.qmd # miR DE analysis
+#    - t2d_10_chg.qmd # deprecated
+    - t2d_11_wcn.qmd # miR DE analysis
     - references.qmd
 
 bibliography: references.bib
 
 format:
   html:
-    theme: litera
+    theme:
+      light: flatly
+      dark: superhero
     page-layout: full
+    code-block-bg: true
+    code-block-border-left: "#31BAE9"
     code-fold: show
+    code-link: true
     code-overflow: wrap
     code-summary: "Show the code"
+    code-tools:
+      source: true
+      toggle: true
     css: styles.css
+    highlight-style: ayu
   pdf:
     documentclass: scrreport
     header-includes: |
@@ -37,6 +50,8 @@ format:
       \makeindex
     include-after: |
       \printindex
+
+always_allow_html: true
 
 editor:
   markdown:

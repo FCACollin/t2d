@@ -5,6 +5,23 @@ author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d')`"
 ---
 
+## Introduction
+
+Data missingness was addressed by a missing‑data imputation algorithm,
+employed to impute missing values while minimizing bias on results
+[R package `missMDA`, @Josse2016]);
+"observed cases" and "imputed data" later refers to the exclusion/inclusion
+of imputed data.
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional package downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `ggplot2` for graphics [version 3.3.6, @Wickham2016].
+
+## Program settings
+
 ```{r, settings}
 params <- yaml::read_yaml("_prog.yml")
 devtools::load_all("src/pkg/dbs.data")
@@ -13,6 +30,7 @@ devtools::load_all("src/pkg/latarnia.utils")
 knitr::opts_chunk$set(results = params$knitr$results)
 ```
 
+## Data Preparation
 
 ```{r, ads}
 #| code-fold: show
@@ -21,21 +39,59 @@ advs <- dbs.data::advs
 adlb <- dbs.data::adlb
 ```
 
-```{r, fig_001}
-#| fig-width: 8
+
+## Figure 03 output 01
+
+```{r, fig_03_01}
 library(ggplot2)
 gg <- rbind(adlb, advs) |>
   ggplot(aes(subjid, paramcd, fill = dtype)) +
-  scale_fill_manual(values = c("gray", "orange")) +
+  scale_fill_manual(values = c("white", "gray75")) +
   geom_tile(color = "gray50") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme(
+    text = element_text(size = 7),
+    axis.title = element_blank(),
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    legend.position = "none",
+    legend.title = element_blank()
+  )
 ```
 
-```{r, fig_001_render, eval=params$knitr$results!="hide"}
-gg
+
+```{r, fig_03_01_an}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 3.1",
+      "Colored raster - Data missingness per Subject and Parameter",
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, width = unit(5.2, "inches"), height = unit(3.5, "inches")) |>
+  add_footer(
+    paste0("Program t2d_03_bds / Env ayup_dbs:", params$dock$version),
+    params$version
+  )
 ```
 
+```{r, fig_03_01_xp}
+export_as(
+  p,
+  file = file.path(params$paths$grh, "fig_03_01.pdf"),
+  file_graph_alone = file.path(params$paths$grh, "fig_03_01_af.pdf")
+)
+```
 
+```{r, fig_03_01_sh, eval=params$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
 
+## Session Informations
 
+```{r}
+sessioninfo::session_info()
+```

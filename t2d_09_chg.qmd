@@ -1,62 +1,40 @@
 ---
-title: "Anthropometrics Change From Baseline"
+title: "Anthropometrics Changes From Baseline"
 subtitle: Program 09
 author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d')`"
 ---
 
-## Tab 09 01 - Ancova - Anthropometrics Changes from Baseline by Diabetes Group
+## Introduction
 
-_Questions:
-for the analysis of a post-treatment values, should we analyse the change
-from baseline or percentage change from baseline? Should we adjust for the
-baseline?_
+Diabetes group estimations in anthropometrics changes from baseline were
+obtained and tested by analysis of covariance models (Ancova), relying once
+more on the Fisher test; to increase accuracy and statistical power,
+estimations were adjusted for baseline values
+[@Vickers2001; @VanBreukelen2006; @CHMP2015; @OConnell2017].
 
-Back to 2003, in the context of randomized clinical trial, 
-the European Medicines Agency [@CPMP2003],
-when the endpoint is studied as a change from
-baseline, the adjustment for baseline improves the accuracy in comparison
-to non-baseline adjustment; estimates becomes also equivalent to the standard
-linear model, the choice of change from baseline analysis or raw value is then
-only a question of interpretability. 
-They renewed the recommendation in 2015 [@CHMP2015].
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
 
-From the academic side, the topic was repeatedly studied:
+- `car` for regression model test [version 3.0-13, @Fox2019]
+- `emmeans` for least-Squares Means (LSM) estimations [version 1.7.3, @Lenth2022]
+- `flextable` for output table formatting [version 0.7.0, @Gohel2022]
+- `tidyr` for data wrangling [version 1.2.0, @Wickham2022].
 
-- @VanBreukelen2006:
-    > _"In randomized studies both methods [Anova, no BL adjustment vs Ancova]
-    > are unbiased, but ANCOVA has more power"_
-    
-- @Liu2009 also highlighted the benefits of adjustment for baseline as a
-covariate.
-- this was later confirmed by @Zhang2014.
-- More recently @OConnell2017 also defended the superiority of the
-  Ancova-change:
-  $y_i = \beta_0 + \beta_1 X_i + \beta_2 Y_{0i,=BL} + \varepsilon_i$
-
-> _"Consistent with existing literature, our results demonstrate that each
-> method leads to unbiased treatment effect estimates, and based on precision
-> of estimates, 95% coverage probability, and power, ANCOVA modeling of either
-> change scores or post-treatment score as the outcome, prove to be the most
-> effective._"
-
-Most of the authors above are specifically working on randomized trial,
-@Vickers2001 also brought some light on the topic, and highlighted in addition
-that: working with percentage change is generally a bad idea. The extended
-to a theoretical works also indicated that the percentage change from
-baseline _"will also fail to protect from bias in the case of baseline imbalance
-and will lead to an excess of trials with non-normally distributed outcome
-data"_.
-
+## Settings
 
 ```{r, settings}
-params <- yaml::read_yaml("_prog.yml")
+cfg_prog <- yaml::read_yaml("_prog.yml")
 devtools::load_all("src/pkg/dbs.data")
 devtools::load_all("src/pkg/latarnia.utils")
+source("R/inches.R")
 
-knitr::opts_chunk$set(results = params$knitr$results)
+knitr::opts_chunk$set(results = cfg_prog$knitr$results)
 ```
 
+## Data
 
 ```{r, adam}
 #| code-fold: show
@@ -78,6 +56,8 @@ ads <- adlb |>
 
 head(ads)
 ```
+
+## Helper functions
 
 ```{r, extra_functions}
 format_pval <- function(x) {
@@ -109,10 +89,7 @@ lm_by_paramcd <- function(x,
   )
   formula <- as.formula(formula)
   
-  lapply(
-    x,
-    \(x) list(data = x, lm = lm(formula, data = x))
-  )
+  lapply(x, \(x) list(data = x, lm = lm(formula, data = x)))
 }
 
 make_specs <- function(var) as.formula(paste("~", var))
@@ -121,8 +98,7 @@ lsm_by_param <- function(x, indep_var = "diabcd_n") {
     x,
     \(x) {
       mod_em <- emmeans::emmeans(x$lm, specs = make_specs(indep_var))
-      y <- multcomp::cld(mod_em, Letters = letters)
-      y <- as.data.frame(y)
+      y <- as.data.frame(mod_em)
       cbind(
         paramcd = unique(x$data$paramcd),
         y,
@@ -133,13 +109,15 @@ lsm_by_param <- function(x, indep_var = "diabcd_n") {
 }
 ```
 
+## Tab 09 01 - Ancova - Anthropometrics Changes from Baseline by Diabetes Group
+
 ```{r}
 tab_09_01_raw <- ads |>
   (\(x) split(x, f = x$paramcd))() |>
   lm_by_paramcd(dep_var = "chg", covariate = "base", indep_var = "diabcd_n") |>
   lsm_by_param(indep_var = "diabcd_n") |>
   (\(x) Reduce(rbind, x))()
- 
+
 tab_09_01 <- tab_09_01_raw |>
   (\(df) df[order(df$diabcd_n), ])() |>
   within({
@@ -166,12 +144,6 @@ tab_09_01_ft <- tab_09_01 |>
   flextable() |>
   autofit() |>
   footnote(
-    value = as_paragraph(
-      "Note: rows are ordered by increasing p values, most significant on top."
-    ),
-    ref_symbols = ""
-  ) |>
-  footnote(
     part = "header",
     i = 1, j = 2,
     value = as_paragraph(
@@ -179,20 +151,16 @@ tab_09_01_ft <- tab_09_01 |>
     ),
     ref_symbols = "a"
   ) |>
-  footnote(
-    value = as_paragraph(wrap_line(
-      "Source: Full Analysis Set, observed cases at baseline and post
-      intervention."
-    )),
-    ref_symbols = ""
-  ) |>
-  add_header_lines(wrap_long_lines(
-    "Analysis Set: Full Analysis Set - Observed Cases"
+  add_footer_lines(c(
+    wrap_line("Source: Full Analysis Set, observed cases at baseline and post
+    intervention."),
+    "Note: rows are ordered by increasing p values, most significant on top."
   )) |>
+  add_header_lines("Analysis Set: Full Analysis Set - Observed Cases") |>
   set_caption(
     caption =  wrap_long_lines(
       "Tab 09 01 - Analysis of Covariance / Least Means Square estimations of
-      Anthropometrics Changes from baseline by Diabetes Group at
+      Anthropometrics Changes from Baseline by Diagnosis Group at
       Month 3 (95% Confidence Interval) Adjusted for Baseline"
     )
   ) |>
@@ -202,8 +170,8 @@ tab_09_01_ft
 
 ```{r}
 bnm <- "tab_09_01"
-dir_tab <- params$paths$tab
-dir_dta <- params$paths$dta
+dir_tab <- cfg_prog$paths$tab
+dir_dta <- cfg_prog$paths$dta
 
 file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
   message("[output] Table saved as ", .) %>%
@@ -225,3 +193,157 @@ file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
   message("[output] Table saved as ", .) %>%
   write.csv(tab_09_01, file = ., row.names = FALSE)
 ```
+
+```{r}
+detach(package:flextable)
+```
+
+
+## Example: Glucose 120 - Fig 09 01
+
+```{r, f09_01}
+library(ggplot2)
+dta <- dbs.data::adlb |>
+  subset(
+    paramcd == "GLU120" &
+      dtype == "" &
+      avisit == "Month 3" &
+      basetype == ""
+  ) |>
+  merge(x = adsl[c("subjid", "diabcd")], y = _, by = "subjid")
+
+dta$lm_pred <- predict(lm(aval ~ base, data = dta))
+lim <- range(c(dta$aval, dta$base))
+
+gg1 <- ggplot(dta, aes(base, aval, color = diabcd)) +
+  geom_point() +
+  ylab("Post exercise intervention") +
+  xlab("Baseline") +
+  geom_segment(aes(xend = base, yend = lm_pred)) + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = 1) +
+  scale_color_viridis_d(begin = .1, end = .9, direction = -1) +
+  coord_cartesian(xlim = lim, ylim = lim) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+gg2 <- ggplot(dta, aes(base, fill = diabcd, color = diabcd)) +
+  geom_boxplot(alpha = .5, show.legend = FALSE) +
+  coord_cartesian(xlim = lim) +
+  ylab("diabcd") +
+  scale_color_viridis_d(begin = .1, end = .9, direction = -1) +
+  scale_fill_viridis_d(begin = .1, end = .9, direction = -1) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    axis.title.x = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank()
+  )
+
+gg <- cowplot::plot_grid(
+  gg1, gg2,
+  nrow = 2,
+  align = "v",
+  rel_heights = c(1, .15)
+)
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 9.1",
+      strwrap(
+        "Scatter plot - Glucose 120 at Month 3 in relation to Baseline by
+        treatment group", width = 80
+      ),
+      "Analysis Set: Full Analysis Set - Observed Cases"
+    )
+  ) |>
+  add_figure(gg, height = inches(5.5), width = inches(4.5))|>
+  add_note(c(
+    "Note: the table prog 08 output 01 focuses on the x-axis and check for
+     differences at baseline, the boxplots gives an overview of these
+     baseline variation.",
+    "Note: the table tab prog 09 output 01 shows the effect of exercise in
+     each group. The p.values is provided and accounts for the diagnostic group
+     effect, while taking into account the fact that the higher the value at
+     baseline, the higher after the exercise intervention. Actually, 
+     the analysis of covariance model focus on how much above or below the
+     general regression (black line) is positionned a diagnosis group.
+     E.g., +20 for T2D indicates that the result after exercise is 20 units
+     higher than expected if there were no diagnostic group effect; ... however,
+     the confidence interval extend from -13.5 and +53.8 which means that
+     i) if we repeated the study, 100 times, it would result 95 times from
+     -13.5 to 53.8
+     ii) the interval includes 0 so we can't conclude to a significant
+     increase or decrease in Glucose 120 due to the exercise intervention."
+  )) |>
+  add_footer(
+    c(
+      "Program t2d_09_chg / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_09_01.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_09_01_af.pdf")
+)
+
+```
+
+```{r, f09_01_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
+```
+
+## Untidied information about analysis of change from baseline
+
+_Questions:
+for the analysis of a post-treatment values, should we analyse the change
+from baseline or percentage change from baseline? Should we adjust for the
+baseline?_
+
+Back to 2003, in the context of randomized clinical trial, 
+the European Medicines Agency [@CPMP2003],
+when the endpoint is studied as a change from
+baseline, the adjustment for baseline improves the accuracy in comparison
+to non-baseline adjustment; estimates becomes also equivalent to the standard
+linear model, the choice of change from baseline analysis or raw value is then
+only a question of interpretability. 
+They renewed the recommendation in 2015 [@CHMP2015].
+
+From the academic side, the topic was repeatedly studied:
+
+- @VanBreukelen2006:
+> _"In randomized studies both methods [Anova, no BL adjustment vs Ancova]
+> are unbiased, but ANCOVA has more power"_
+
+- @Liu2009 also highlighted the benefits of adjustment for baseline as a
+covariate.
+- this was later confirmed by @Zhang2014.
+- More recently @OConnell2017 also defended the superiority of the
+Ancova-change:
+$y_i = \beta_0 + \beta_1 X_i + \beta_2 Y_{0i,=BL} + \varepsilon_i$
+
+> _"Consistent with existing literature, our results demonstrate that each
+> method leads to unbiased treatment effect estimates, and based on precision
+> of estimates, 95% coverage probability, and power, ANCOVA modeling of either
+> change scores or post-treatment score as the outcome, prove to be the most
+> effective._"
+
+Most of the authors above are specifically working on randomized trial,
+@Vickers2001 also brought some light on the topic, and highlighted in addition
+that: working with percentage change is generally a bad idea. The extended
+to a theoretical works also indicated that the percentage change from
+baseline _"will also fail to protect from bias in the case of baseline imbalance
+and will lead to an excess of trials with non-normally distributed outcome
+data"_.

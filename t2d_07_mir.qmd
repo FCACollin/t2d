@@ -1,34 +1,111 @@
 ---
-title: "micro RNA"
+title: "mRNA / micro RNA"
 subtitle: Program 07
 author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d')`"
+always_allow_html: true
 ---
 
 
 ## miRNA Seq - Differential expression analysis
 
+```{r, cfg_prog}
+cfg_prog <- yaml::read_yaml("_prog.yml")
+```
+
+The variation in messenger RNA (mRNA) and micro-RNA (miRNA) abundance measured
+by RNA-Seq associated
+either with the dysglycemia and/or the 3-month exercise intervention were
+investigated by a Differential Expression analysis (DE). At baseline,
+the DE model included only the effect of the dysglycemia-constrast group,
+consistently with the Anova model applied for demographics and baseline
+anthropometrics.
+To do so, genetic features which were never found expressed were discarded.
+Then RNA-Seq libraries were included if reaching a
+read depth threshold (total number of reads per sample) fixed by visual
+examination of the association between sample gene diversity and sample depth.
+For the remaining libraries, genetic features were included if the count per
+million reads (CPM) was greater than `r cfg_prog$rna$cpm_threshold$allmirna`
+in at least `r cfg_prog$rna$cpm_threshold$fraccol * 100`% of the samples. 
+The DE analysis implementation proposed by @Love2014 with the R package
+`DESeq2` was used to fit the models; it is based on a negative binomial
+distribution accounting for read variability, dispersion corrected after trends
+seen across all samples and genes [@Duendar2018].
+In addition, the number of tested genes being high, raw p.values were
+therefore adjusted according to Benjamini and Hochberg's method also called
+False-Discovery Rate (FDR).
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `DESeq2` for differential expression analysis and
+variance stabilizing transformation [version 1.36.0, @Love2014]
+- `ggplot2` for graphics [version 3.3.6, @Wickham2016]
+- `MultiAssayExperiment` for management of multi-omics experiment objects
+[version 1.22.0, @Ramos2017].
+
 Target:
 
 - [x] miRNA DE at baseline without confounding factors.
 
-
 ```{r, settings}
-params <- if (exists("params")) {
-  c(params, yaml::read_yaml("_prog.yml"))
-} else {
-  yaml::read_yaml("_prog.yml")
-}
-
 devtools::load_all("src/pkg/dbs.data")
 devtools::load_all("src/pkg/latarnia.utils")
 
-knitr::opts_chunk$set(results = params$knitr$results)
+knitr::opts_chunk$set(results = cfg_prog$knitr$results)
 library(assertthat)
+library(ggplot2)
 source("R/ngs.R")
+source("R/inches.R")
 ```
 
-### Data preparation
+### Materials and Methods
+
+#### Helper functions
+
+```{r}
+# Help for data pre-processing
+filter_for_depth <- function(mae, assay, depth_threshold) {
+  mae[, colSums(mae[[ngs_assay]]) > depth_threshold, ]
+}
+
+filter_for_visit <- function(mae, visit) {
+  mae[, colData(mae)$avisit == visit, ]
+}
+
+filter_for_low_expr <- function(mae, assay, cpm_threshold,
+                                frac_cols = cfg_prog$rna$cpm_threshold$fraccol
+) {
+  # Genes expressed at least cpm_threshold in frac_cols columns
+  mae[
+    rowSums(cpm(mae[[assay]]) > cpm_threshold) >
+      ncol(mae[[assay]]) * frac_cols,
+    ,
+  ]
+}
+
+# Differential expression helper functions:
+de_by_ctrs <- function(df,
+                       ctrs,
+                       adj_meth = ctrl$adj_meth) {
+  lapply(
+    ctrs,
+    fit = df,
+    adj_meth = adj_meth,
+    FUN = function(x, fit, adj_meth) {
+      y <- DESeq2::results(fit, contrast = x, pAdjustMethod = adj_meth)
+      y$feature <- rownames(y)
+      y$log_padj <- -1 * log10(y$padj)
+      y$ctrs <- paste(x["test"], "vs", x["ref"])
+      as.data.frame(y)
+    }
+  )
+}
+```
+
+#### Data preparation
 
 ```{r, ads}
 #| code-fold: show
@@ -41,16 +118,12 @@ adlb <- dbs.data::adlb
 subjvis_to_spl <- function(df) paste0(df$subjid, "v", df$avisitn)
 
 ads <- adlb |>
-  subset(
-    paramcd %in% c(
-      "CHOL", "HBA1C", "HDL", "HOMAB", "HOMAIR", "LDL", "MATSUDA", "TRIG"
-    )
-  ) %>%
   rbind(advs) |>
   subset(select = -c(ct, dtype, param, base, basetype, chg, pchg)) |>
   tidyr::pivot_wider(names_from = "paramcd", values_from = "aval") |>
-  (\(df) merge(adsl, df, by = "subjid"))() |>
+  merge(adsl, y = _, by = "subjid") |>
   (\(df) S4Vectors::DataFrame(df, row.names = subjvis_to_spl(df)))() |>
+  subset(select = c(subjid, diabcd, diab, avisitn, avisit)) |>
   (\(df) {
     assertthat::assert_that(all(table(subjvis_to_spl(df)) == 1))
     df
@@ -72,17 +145,15 @@ rna[c("premirna", "mirna")] <- lapply(
   FUN = format_mirna
 )
 
-# Rows represent genes.
+# Rows represent genes
 rna <- lapply(X = rna, FUN = function(x) y <- x[rowSums(x) > 0, ])
 rna <- lapply(X = rna, as.matrix)
 assertthat::assert_that(all(colnames(rna$premirna) == colnames(rna$mirna)))
 rna$allmirna <- rbind(rna$premirna, rna$mirna)
+
 library(testthat)
 test_that("rna features discriminated in noexpr, expr", {
-  lapply(
-    X = rna,
-    FUN = function(x) expect_true(all(rowSums(x) > 0))
-  )
+  lapply(X = rna, FUN = \(x) expect_true(all(rowSums(x) > 0)))
 })
 ```
 
@@ -91,7 +162,7 @@ library(MultiAssayExperiment)
 
 #' (Sample-)Map Arrays
 #'
-#' Use the colnames of `x` to deduce the `primary` and `colnames`.
+#' Use the column names of `x` to deduce the `primary` and `colnames`.
 #' This is used to generate the sample mapping between colData and Experiments.
 #'
 #' @param x (`dataframe`).
@@ -104,8 +175,8 @@ library(MultiAssayExperiment)
 #' @seealso [MultiAssayExperiment::listToMap()]
 #' @examples
 #' \dontrun{
-#' lapply(rna, map_arrays)
-#' MultiAssayExperiment::listToMap(lapply(rna, map_arrays))
+#'   lapply(rna, map_arrays)
+#'   MultiAssayExperiment::listToMap(lapply(rna, map_arrays))
 #' }
 #'
 map_arrays <- function(x) {
@@ -123,74 +194,118 @@ besd_mae <- MultiAssayExperiment(
 besd_mae
 ```
 
-## `dds_1` - DE: Baseline, all micro RNA
+## Sample depth threshold determination
 
-```{r, dds_1_dta}
-ctrl <- yaml::read_yaml("_prog.yml")$rna
+A scatter plot representing sample gene diversity in relationship with sample
+depth evidenced a threshold for miRNA reads at
+`r formatC(cfg_prog$rna$depth_threshold$allmirna, format = "e", digits = 0)`
+reads for which approximately a million read increase was associated with more
+than a 2-fold increase in gene diversity. The depth threshold for mRNA was
+fixed at 
+`r formatC(cfg_prog$rna$depth_threshold$allmrna, format = "e", digits = 0)`,
+although with a less important but still substantial drop in gene variety
+below that threshold.
 
-ngs_assay <- "allmirna"
+::: {.panel-tabset}
 
-filter_for_depth <- function(mae, assay, depth_threshold) {
-  mae[, colSums(mae[[ngs_assay]]) > depth_threshold, ]
-}
-
-filter_for_visit <- function(mae, visit) {
-  mae[, colData(mae)$avisit == visit, ]
-}
-
-filter_for_low_expr <- function(mae, assay, cpm_threshold, frac_cols = 1 / 2) {
-  # Genes expressed at least cpm_threshold in frac_cols columns
-  mae[
-    rowSums(cpm(mae[[assay]]) > cpm_threshold) >
-      ncol(mae[[assay]]) * frac_cols,
-    ,
-  ]
-}
-
-ads <- besd_mae |>
-  (\(mae) mae[ , , ngs_assay])() |>
-  filter_for_depth("allmirna", ctrl$depth_threshold[[ngs_assay]]) |>
-  filter_for_visit("Baseline") |>
-  filter_for_low_expr("allmirna", ctrl$cpm_threshold[[ngs_assay]])
-
-dds_1_dta <- DESeq2::DESeqDataSetFromMatrix(
-  countData = ads[[ngs_assay]],
-  colData = colData(ads),
-  design = stats::formula(~ diabcd)
+```{r, depth_diversity_gg, eval=FALSE, echo=FALSE}
+vline <- cfg_prog$rna$depth_threshold[[assay]]
+dtaplot <- assays(besd_mae)[[assay]]
+dtaplot <- data.frame(
+  n_gene = colSums(dtaplot > 0),
+  depth  = colSums(dtaplot)
 )
+
+dtaplot <- cbind(
+  dtaplot,
+  data.frame(colData(besd_mae)[rownames(dtaplot),])
+)
+
+gg <- ggplot(
+  data = dtaplot,
+  mapping = aes(x = depth, y = n_gene, colour = diab)
+) +
+  geom_point() +
+  geom_vline(xintercept = vline) +
+  xlab("Sample depth") +
+  ylab("Gene diversity (number of genes with reads)") +
+  coord_cartesian(ylim = c(0, NA)) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+```{r, depth_diversity_plotly, eval=FALSE, echo=FALSE}
+plotly::ggplotly(gg)
 ```
 
 
-```{r, dds_1_fit}
-dds_1_fit <- DESeq2::DESeq(
-  object = dds_1_dta,
-  quiet = FALSE, # default: FALSE
-  minReplicatesForReplace = 7, # default: 7
-  useT = FALSE, # default: FALSE
-  minmu = 0.5, # default: 0.5
-  parallel = TRUE,
-  BPPARAM = BiocParallel::bpparam()
-)
+### miRNA
+
+::: {.panel-tabset}
+
+#### Static figure
+
+```{r, depth_diversity_mirna}
+assay <- "allmirna"
+```
+
+```{r, depth_diversity_gg, eval=cfg_prog$knitr$results!="hide"}
+```
+
+#### Interactive figure
+
+```{r, depth_diversity_plotly, eval=cfg_prog$knitr$results!="hide"}
+```
+
+:::
+
+### mRNA
+
+::: {.panel-tabset}
+
+#### Static figure
+
+```{r, depth_diversity_mrna}
+assay <- "mrna"
+```
+
+```{r, depth_diversity_gg, eval=cfg_prog$knitr$results!="hide"}
+```
+
+#### Interactive figure
+
+```{r, depth_diversity_plotly, eval=cfg_prog$knitr$results!="hide"}
+```
+
+:::
+
+:::
+
+## `dds_1` - DE: Baseline, all micro RNA
+
+```{r, dds_1_dta}
+ctrl <- cfg_prog$rna
+ngs_assay <- "allmirna"
+
+dds_1_fit <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Baseline") |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) DESeq2::DESeqDataSetFromMatrix(
+    countData = mae[[ngs_assay]],
+    colData = colData(x = mae),
+    design = stats::formula(~ diabcd)
+  ) )() |>
+  DESeq2::DESeq(
+    parallel = TRUE,
+    BPPARAM = BiocParallel::bpparam(),
+    fitType = "local"
+  )
 ```
 
 
 ```{r, dds_1_est}
-de_by_ctrs <- function(df,
-                       ctrs,
-                       adj_meth = ctrl$adj_meth) {
-  lapply(
-    ctrs,
-    fit = df,
-    adj_meth = adj_meth,
-    FUN = function(x, fit, adj_meth) {
-      y <- DESeq2::results(fit, contrast = x, pAdjustMethod = adj_meth)
-      y$feature <- rownames(y)
-      y$log_padj <- -1 * log10(y$padj)
-      y$ctrs <- paste(x["test"], "vs", x["ref"])
-      as.data.frame(y)
-    }
-  )
-}
 dds_1_est <-
   dds_1_fit |>
   de_by_ctrs(
@@ -200,34 +315,38 @@ dds_1_est <-
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  (\(x) Reduce(rbind, x))()
+  Reduce(rbind, x = _)
 ```
 
+### Fig 07 01
 
 ```{r, dds_1_gg}
-library(ggplot2)
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_1_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
 dds_1_gg <-
   dds_1_est |>
-  ggplot(mapping = aes(log2FoldChange, log_padj, fill = log10(..count..))) +
-  geom_hline(yintercept = -1 * log10(c(0.05, 0.001)), lty = 2, lwd = .5) +
+  ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
   geom_vline(xintercept = c(-1, 1), lty = 2) +
-  annotate(
-    geom  = "label", x = -Inf, y = -1 * log10(0.05),
-    label = "p = 0.05",
-    fill = "white", hjust = "left", size = 2, alpha = 1
-  ) +
-  annotate(
-    geom  = "label", x = -Inf, y = -1 * log10(0.001),
-    label = "p = 0.001",
-    fill = "white", hjust = "left", size = 2, alpha = 1
-  ) +
   xlab("Log2-fold-change") +
   ylab(expression(-1 %*% log10(padj))) +
   stat_bin_hex() +
   scale_fill_gradient(low = "black", high = "gray90") +
-    facet_grid(. ~ ctrs) +
+  scale_y_continuous(breaks = brk) +
+  facet_grid(. ~ ctrs) +
   theme_minimal() +
-  theme(legend.position = "bottom", asp = 2 / 3)
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(3, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
 ```
 
 ```{r, dds_1_an}
@@ -235,7 +354,7 @@ p <- clean_slate() |>
   add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
   add_title(
     c(
-      "Figure 1",
+      "Figure 7.1",
       strwrap(
         "Volcano plot - Response Size and Significance of Differential
         Expression among all miRNA at Baseline", width = 80
@@ -243,24 +362,687 @@ p <- clean_slate() |>
       "Analysis Set: Full Analysis Set"
     )
   ) |>
-  add_figure(dds_1_gg, height = .9) |>
+  add_figure(dds_1_gg, height = inches(3), width = inches(6)) |>
   add_footer(
-    "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
-    params$version
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
   )
 ```
 
 ```{r, dds_1_xp}
 export_as(
   p,
-  file = file.path(params$paths$grh, "fig_07_01.pdf"),
-  file_graph_alone = file.path(params$paths$grh, "fig_07_01_af.pdf")
+  file = file.path(cfg_prog$paths$grh, "fig_07_01.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_01_af.pdf")
 )
 ```
 
-```{r, dds_1_sh, eval=params$knitr$results!="hide"}
+```{r, f07_01_sh, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 8.3
 #| fig-height: 11.7
 show_slate(p)
 ```
 
+
+### Fig 07 02
+
+```{r, f07_02}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_1_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_1_est$label <- gsub(
+  "hsa-(mir|miR|let)-",
+  dds_1_est$feature,
+  replacement = ""
+)
+dds_1_est$type <- substr(dds_1_est$feature, start = 5, stop = 7)
+head(dds_1_est)
+
+dds_1_gg <- ggplot(
+  dds_1_est,
+  mapping = aes(x = log2FoldChange, y = log_padj, col = type)
+) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex(mapping = aes(fill = log10(..count..)), color = "transparent") +
+  geom_point(
+    data = subset(dds_1_est, padj < 0.001 & abs(log2FoldChange) > 1),
+    size = 1,
+    shape = 3
+  ) +
+  geom_text(
+    data = subset(dds_1_est, padj < 0.001 & abs(log2FoldChange) > 1),
+    aes(label = label),
+    vjust = -0.5,
+    size = 2,
+    show.legend = FALSE
+  ) +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_color_manual(values = c("#FF5003", "#003F7D")) +
+  scale_y_continuous(breaks = brk) +
+  facet_wrap(. ~ ctrs, ncol = 3) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(2, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.2",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among all miRNA at Baseline", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_1_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_02.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_02_af.pdf")
+)
+
+```
+
+```{r, f07_02_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+## `dds_2` - DE: Baseline, mRNA
+
+```{r, dds_2_dta}
+ctrl <- cfg_prog$rna
+ngs_assay <- "mrna"
+
+dds_2_fit <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Baseline") |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) DESeq2::DESeqDataSetFromMatrix(
+    countData = mae[[ngs_assay]],
+    colData = colData(x = mae),
+    design = stats::formula(~ diabcd)
+  ) )() |>
+  DESeq2::DESeq(
+    parallel = TRUE,
+    BPPARAM = BiocParallel::bpparam()
+  )
+```
+
+```{r, dds_2_est}
+dds_2_est <-
+  dds_2_fit |>
+  de_by_ctrs(
+    ctrs = list(
+      c("diabcd", test = "T2D", ref = "NGT"),
+      c("diabcd", test = "T2D", ref = "IGT"),
+      c("diabcd", test = "IGT", ref = "NGT")
+    )
+  ) |>
+  Reduce(rbind, x = _)
+```
+
+### Fig 07 03
+
+```{r, dds_2_gg}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_2_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_2_gg <-
+  dds_2_est |>
+  ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_y_continuous(breaks = brk) +
+  facet_grid(. ~ ctrs) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(3, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r, dds_2_an}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.3",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among all miRNA at Baseline", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_2_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+```
+
+```{r, dds_2_xp}
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_03.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_03_af.pdf")
+)
+```
+
+```{r, f07_03_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+
+### Fig 07 04
+
+```{r, f07_04}
+dds_2_est$label <- gsub("ENSG0+", "", dds_2_est$feature)
+head(dds_2_est)
+
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_2_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_2_gg <- ggplot(dds_2_est, mapping = aes(x = log2FoldChange, y = log_padj)) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex(mapping = aes(fill = log10(..count..)), color = "transparent") +
+  geom_point(
+    data = subset(dds_2_est, padj < 0.001 & abs(log2FoldChange) > 2),
+    size = 1,
+    shape = 3,
+    color = "royalblue"
+  ) +
+  geom_text(
+    data = subset(dds_2_est, padj < 0.001 & abs(log2FoldChange) > 2),
+    aes(label = label),
+    vjust = -0.5,
+    size = 2,
+    color = "royalblue",
+    show.legend = FALSE
+  ) +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_color_manual(values = c("#FF5003", "#003F7D")) +
+  scale_y_continuous(breaks = brk) +
+  facet_wrap(. ~ ctrs, ncol = 3) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(2, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.4",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among all miRNA at Baseline", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_2_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_04.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_04_af.pdf")
+)
+
+```
+
+```{r, f07_04_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+
+## `dds_3` - DE: Month 3, all micro RNA
+
+```{r, dds_3_dta}
+ctrl <- cfg_prog$rna
+ngs_assay <- "allmirna"
+
+dds_3_fit <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Month 3") |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) DESeq2::DESeqDataSetFromMatrix(
+    countData = mae[[ngs_assay]],
+    colData = colData(x = mae),
+    design = stats::formula(~ diabcd)
+  ) )() |>
+  DESeq2::DESeq(
+    parallel = TRUE,
+    BPPARAM = BiocParallel::bpparam(),
+    fitType = "local"
+  )
+```
+
+
+```{r, dds_3_est}
+dds_3_est <-
+  dds_3_fit |>
+  de_by_ctrs(
+    ctrs = list(
+      c("diabcd", test = "T2D", ref = "NGT"),
+      c("diabcd", test = "T2D", ref = "IGT"),
+      c("diabcd", test = "IGT", ref = "NGT")
+    )
+  ) |>
+  Reduce(rbind, x = _)
+```
+
+### Fig 07 05
+
+```{r, f07_05}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_3_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+dds_3_gg <-
+  dds_3_est |>
+  ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_y_continuous(breaks = brk) +
+  facet_grid(. ~ ctrs) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(3, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.5",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among all miRNA at Month 3", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_3_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_05.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_05_af.pdf")
+)
+```
+
+```{r, f07_05_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+
+### Fig 07 06
+
+```{r, f07_06}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_3_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_3_est$label <- gsub(
+  "hsa-(mir|miR|let)-",
+  dds_3_est$feature,
+  replacement = ""
+)
+dds_3_est$type <- substr(dds_3_est$feature, start = 5, stop = 7)
+head(dds_3_est)
+
+dds_3_gg <- ggplot(
+  dds_3_est,
+  mapping = aes(x = log2FoldChange, y = log_padj, col = type)
+) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex(mapping = aes(fill = log10(..count..)), color = "transparent") +
+  geom_point(
+    data = subset(dds_3_est, padj < 0.001 & abs(log2FoldChange) > 1),
+    size = 1,
+    shape = 3
+  ) +
+  geom_text(
+    data = subset(dds_3_est, padj < 0.001 & abs(log2FoldChange) > 1),
+    aes(label = label),
+    vjust = -0.5,
+    size = 2,
+    show.legend = FALSE
+  ) +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_color_manual(values = c("#FF5003", "#003F7D")) +
+  scale_y_continuous(breaks = brk) +
+  facet_wrap(. ~ ctrs, ncol = 3) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(2, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.6",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among all miRNA at Month 3", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_3_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_06.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_06_af.pdf")
+)
+
+```
+
+```{r, f07_06_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+## `dds_4` - DE: Month 3, mRNA
+
+```{r, dds_4_dta}
+ctrl <- cfg_prog$rna
+ngs_assay <- "mrna"
+
+dds_4_fit <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Month 3") |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) DESeq2::DESeqDataSetFromMatrix(
+    countData = mae[[ngs_assay]],
+    colData = colData(x = mae),
+    design = stats::formula(~ diabcd)
+  ) )() |>
+  DESeq2::DESeq(
+    parallel = TRUE,
+    BPPARAM = BiocParallel::bpparam()
+  )
+```
+
+```{r, dds_4_est}
+dds_4_est <-
+  dds_4_fit |>
+  de_by_ctrs(
+    ctrs = list(
+      c("diabcd", test = "T2D", ref = "NGT"),
+      c("diabcd", test = "T2D", ref = "IGT"),
+      c("diabcd", test = "IGT", ref = "NGT")
+    )
+  ) |>
+  Reduce(rbind, x = _)
+```
+
+### Fig 07 07
+
+```{r, f07_07}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_4_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_4_gg <-
+  dds_4_est |>
+  ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_y_continuous(breaks = brk) +
+  facet_grid(. ~ ctrs) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(3, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.7",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among all mRNA at Month 3", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_4_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_07.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_07_af.pdf")
+)
+```
+
+```{r, f07_07_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+
+### Fig 07 08
+
+```{r, f07_08}
+dds_4_est$label <- gsub("ENSG0+", "", dds_4_est$feature)
+head(dds_4_est)
+
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_4_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_4_gg <- ggplot(dds_4_est, mapping = aes(x = log2FoldChange, y = log_padj)) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex(mapping = aes(fill = log10(..count..)), color = "transparent") +
+  geom_point(
+    data = subset(dds_4_est, padj < 0.001 & abs(log2FoldChange) > 2),
+    size = 1,
+    shape = 3,
+    color = "royalblue"
+  ) +
+  geom_text(
+    data = subset(dds_4_est, padj < 0.001 & abs(log2FoldChange) > 2),
+    aes(label = label),
+    vjust = -0.5,
+    size = 2,
+    color = "royalblue",
+    show.legend = FALSE
+  ) +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_color_manual(values = c("#FF5003", "#003F7D")) +
+  scale_y_continuous(breaks = brk) +
+  facet_wrap(. ~ ctrs, ncol = 3) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(2, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.8",
+      strwrap(
+        "Volcano plot - Response Size and Significance of Differential
+        Expression among mRNA at Month 3", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_4_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_08.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_08_af.pdf")
+)
+
+```
+
+```{r, f07_08_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
+```

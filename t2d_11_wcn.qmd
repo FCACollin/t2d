@@ -1,0 +1,844 @@
+---
+title: "WGCNA"
+subtitle: Program 11
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+always_allow_html: true
+---
+
+
+## mRNA Seq - WGCNA
+
+```{r, cfg_prog}
+cfg_prog <- yaml::read_yaml("_prog.yml")
+```
+
+```{r, settings}
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = cfg_prog$knitr$results)
+
+source("R/ngs.R")
+source("R/inches.R")
+```
+
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `DESeq2` for differential expression analysis and
+  variance stabilizing transformation [version 1.36.0, @Love2014]
+
+### Materials and Methods
+
+#### Helper functions
+
+```{r}
+# Help for data pre-processing
+filter_for_depth <- function(mae, assay, depth_threshold) {
+  mae[, colSums(mae[[ngs_assay]]) > depth_threshold, ]
+}
+
+filter_for_visit <- function(mae, visit) {
+  mae[, colData(mae)$avisit == visit, ]
+}
+
+filter_for_low_expr <- function(mae, assay, cpm_threshold,
+                                frac_cols = cfg_prog$rna$cpm_threshold$fraccol
+) {
+  # Genes expressed at least cpm_threshold in frac_cols columns
+  mae[
+    rowSums(cpm(mae[[assay]]) > cpm_threshold) >
+      ncol(mae[[assay]]) * frac_cols,
+    ,
+  ]
+}
+```
+
+#### Data preparation
+
+```{r, ads}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+
+#' Subjid and Visit to Sample
+#' 
+subjvis_to_spl <- function(df) paste0(df$subjid, "v", df$avisitn)
+
+ads <- adlb |>
+  rbind(advs) |>
+  subset(select = -c(ct, dtype, param, base, basetype, chg, pchg)) |>
+  tidyr::pivot_wider(names_from = "paramcd", values_from = "aval") |>
+  merge(adsl, y = _, by = "subjid") |>
+  (\(df) S4Vectors::DataFrame(df, row.names = subjvis_to_spl(df)))() |>
+  subset(select = c(subjid, diabcd, diab, avisitn, avisit, GLU120)) |>
+  (\(df) {
+    assertthat::assert_that(all(table(subjvis_to_spl(df)) == 1))
+    df
+  })()
+
+ads
+```
+
+```{r, rna}
+rna <- list(
+  mrna = dbs.data::mrna_raw,
+  premirna = dbs.data::premirna_raw,
+  mirna = dbs.data::mirna_raw
+)
+
+rna[c("premirna", "mirna")] <- lapply(
+  X = rna[c("premirna", "mirna")],
+  FUN = format_mirna
+)
+
+# Rows represent genes
+rna <- lapply(X = rna, FUN = function(x) y <- x[rowSums(x) > 0, ])
+rna <- lapply(X = rna, as.matrix)
+assertthat::assert_that(all(colnames(rna$premirna) == colnames(rna$mirna)))
+rna$allmirna <- rbind(rna$premirna, rna$mirna)
+
+library(testthat)
+test_that("rna features discriminated in noexpr, expr", {
+  lapply(X = rna, FUN = \(x) expect_true(all(rowSums(x) > 0)))
+})
+```
+
+```{r, mae}
+library(MultiAssayExperiment)
+
+#' (Sample-)Map Arrays
+#'
+#' Use the column names of `x` to deduce the `primary` and `colnames`.
+#' This is used to generate the sample mapping between colData and Experiments.
+#'
+#' @param x (`dataframe`).
+#'
+#' @note In our case, primary and colnames are equivalent, colnames could
+#' be different from primary names when a biological sample has different
+#' names in the biological assays (e.g. machine constraint, technical
+#' repetitions).
+#'
+#' @seealso [MultiAssayExperiment::listToMap()]
+#' @examples
+#' \dontrun{
+#'   lapply(rna, map_arrays)
+#'   MultiAssayExperiment::listToMap(lapply(rna, map_arrays))
+#' }
+#'
+map_arrays <- function(x) {
+  y <- data.frame(colname = colnames(x))
+  y$primary <- y$colname
+  y
+}
+
+besd_mae <- MultiAssayExperiment(
+  experiments = ExperimentList(rna),
+  colData = ads,
+  sampleMap = listToMap(lapply(rna, map_arrays))
+)
+
+besd_mae
+```
+
+```{r, filter, eval=TRUE}
+#' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
+#' # WGCNA: gene in rows, sample in cols
+
+ctrl <- cfg_prog$rna
+ngs_assay <- "allmirna"
+dta <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_visit("Baseline") |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) {
+    mae[[ngs_assay]] <-
+      DESeq2::DESeqDataSetFromMatrix(
+        countData = mae[[ngs_assay]],
+        colData = colData(x = mae),
+        design = stats::formula(~ diabcd)
+      ) |>
+      DESeq2::varianceStabilizingTransformation(blind = FALSE) |>
+      SummarizedExperiment::assay()
+    mae
+  })()
+
+
+#' WGCNA Expression data.
+#'
+#' A matrix or data frame in which columns are genes and rows ar samples.
+#'
+dta_expr <- t(dta[[ngs_assay]])
+assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
+```
+
+### Sample clustering
+
+```{r, sample_clustering, eval=TRUE}
+spl_clust <- hclust(dist(dta_expr), method = "average")
+
+# Clustering Dendrogram of samples based on their Euclidean distance
+theme_custom <- function(...) {
+    theme_dendro() +
+    theme(
+      plot.margin = unit(c(0, 0, 0, 0), "null"),
+      panel.spacing = unit(c(0, 0, 0, 0), "null")
+    ) +
+    theme(...)
+}
+
+library(ggdendro)
+library(ggplot2)
+dend <- spl_clust |> as.dendrogram()
+lim <- c(0, nobs(dend))
+ddata <- ggdendro::dendro_data(dend, type = "rectangle")
+
+p1 <- ggplot(ggdendro::segment(ddata)) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  coord_flip(clip = "off") +
+  scale_y_reverse(expand = expansion(0)) +
+  scale_x_continuous(
+    breaks = seq_len(nobs(dend)),
+    labels = ggdendro::label(ddata)$label,
+    lim = lim,
+    position = "top"
+  ) +
+  theme_custom(axis.text.y = element_text())
+
+dta_traits <- colData(dta)
+dta_traits$x <- rownames(dta_traits)
+dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
+dta_traits <- as.data.frame(dta_traits)
+
+p2 <- ggplot(
+  dta_traits,
+  aes(
+    xmin = 0, xmax = 1,
+    ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
+    fill = diabcd
+  )
+) +
+  geom_rect(col = "white") +
+  scale_y_continuous(breaks = 1:34) +
+  scale_x_continuous(expand = expansion(0)) +
+  scale_fill_viridis_d(option = "C", direction = -1, begin = .2, end = .8) +
+  coord_cartesian(ylim = lim) +
+  theme_custom(legend.position = "top")
+
+p4 <- ggplot(
+  dta_traits,
+  aes(
+    xmin = 0, xmax = 1,
+    ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
+    fill = GLU120
+  )
+) +
+  geom_rect(col = "white") +
+  scale_y_continuous(breaks = 1:34) +
+  scale_x_continuous(expand = expansion(0)) +
+  scale_fill_viridis_c() +
+  coord_cartesian(ylim = lim) +
+  theme_custom(legend.position = "top")
+
+p <- egg::ggarrange(
+  p1, p2, p4,
+  nrow = 1,
+  widths = c(2, 1, 1),
+  padding = unit(0, "lines"),
+  draw = FALSE
+)
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    wrap_long_lines(
+      "Clustering dendrogram of samples based on their Euclidean distance
+      and trait heatmap"
+    )
+  )) |>
+  add_figure(p, height = inches(5))
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+### Soft threshold determination
+
+```{r}
+library(WGCNA)
+enableWGCNAThreads()
+
+sft <- pickSoftThreshold(
+  dta_expr,
+  powerVector = c(c(1:10), seq(from = 12, to=20, by=2)),
+  verbose = 0
+)
+
+library(ggplot2)
+pwr <- cfg_prog$rna$wgcna$sft$allmirna
+p1 <- ggplot(
+  sft$fitIndices,
+  aes(
+    Power,
+    - sign(slope) * SFT.R.sq,
+    label = Power,
+    shape = Power == pwr
+  )
+) +
+  geom_hline(yintercept = .9, lty = 2) +
+  geom_hline(yintercept = c(0, 1), lty = 1) +
+  geom_line() +
+  geom_point(shape = 3) +
+  geom_label(
+    data = sft$fitIndices |> subset(Power == 5),
+    vjust = 0, nudge_y = .025
+  ) +
+  geom_segment(
+    data = sft$fitIndices |> subset(Power == 5),
+    aes(xend = Power, yend = 0)
+  ) +
+  geom_segment(
+    data = sft$fitIndices |> subset(Power == 5),
+    aes(xend = -Inf, yend = - sign(slope) * SFT.R.sq)
+  ) +
+  geom_point(show.legend = FALSE, fill = "white") +
+  scale_shape_manual(values = c("TRUE" = 21, "FALSE" = 3)) +
+  coord_cartesian(ylim = c(0, 1)) +
+  xlab("Soft Threshold (power)") +
+  ylab("Scale Free Topology Model Fit") +
+  ggtitle("Scale independence") +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p2 <- ggplot(
+  sft$fitIndices,
+  aes(Power, mean.k., label = Power, shape = Power == pwr)) +
+  geom_hline(yintercept = .9) +
+  geom_line() +
+  geom_segment(
+    data = sft$fitIndices |> subset(Power == 5),
+    aes(xend = Power, yend = 0)
+  ) +
+  geom_segment(
+    data = sft$fitIndices |> subset(Power == 5),
+    aes(xend = -Inf, yend = mean.k.)
+  ) +
+  geom_label(
+    data = sft$fitIndices |> subset(Power == 5),
+    vjust = 0, hjust = 0, nudge_y = 1
+  ) +
+  geom_point(fill = "white", show.legend = FALSE) +
+  scale_shape_manual(values = c("TRUE" = 21, "FALSE" = 3)) +
+  xlab("Soft Threshold (power)") +
+  ylab("Mean connectivity") +
+  ggtitle("Mean connectivity") +
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank())
+
+p <- egg::ggarrange(p1, p2, nrow = 1, draw = FALSE)
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    "Soft threshold determination"
+  )) |>
+  add_figure(p, width = inches(6), height = inches(3))
+
+```
+
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+### Gene clustering
+
+```{r}
+pwr <- cfg_prog$rna$wgcna$sft$allmirna
+adjc <- adjacency(dta_expr, power = pwr)
+
+# Turn adjacency into topological overlap
+tom <- TOMsimilarity(adjc)
+diss_tom <- 1 - tom
+
+gene_hc <- hclust(as.dist(diss_tom), method = "average")
+
+# We like large modules, so we set the minimum module size relatively high:
+minModuleSize <- 30
+
+# Module identification using dynamic tree cut:
+dyn_mods <- cutreeDynamic(
+  dendro = gene_hc,
+  distM = diss_tom,
+  deepSplit = 2,
+  pamRespectsDendro = FALSE,
+  minClusterSize = minModuleSize
+)
+table(dyn_mods)
+
+# Convert numeric lables into colors
+dyn_col <- labels2colors(dyn_mods)
+table(dyn_col)
+```
+
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+# Plot the dendrogram and colors underneath
+plotDendroAndColors(
+  gene_hc,
+  dyn_col,
+  "Dynamic Tree Cut",
+  dendroLabels = FALSE, hang = 0.03,
+  addGuide = TRUE, guideHang = 0.05,
+  main = "Gene dendrogram and module colors"
+)
+
+
+```
+
+#### Legacy
+
+```{r, eval=FALSE, include=FALSE}
+
+#' WGCNA Wrappers
+#' 
+#' Set of function for standardised pre/post processing of WGCNA results.
+#'
+#' @name wrap_wgcna
+#'
+NULL
+
+#' @describeIn wrap_wgcna sample dendrogram with trait color matrix.
+#' @param x (`list`) suitable for `besd_wgcna`.
+#' @export
+#'
+wrap_sample_dendro <- function(x) {
+  trait_colors <- WGCNA::numbers2colors(x$traits)
+  WGCNA::plotDendroAndColors(
+    x$clust_ind, trait_colors,
+    groupLabels = names(x$traits)
+  )
+  graphics::par(mfrow = c(1, 1))
+}
+
+
+#' VST Norm
+#'
+#' Feature count normalization.
+#'
+#' @param mae (`MultiAssayExperiment`)
+#' @param assay (`character`)
+#' @param adam (`list`)
+#'
+#' @details The VST normalization stems from the differential expression
+#' object preparation so as to insure consistency of methods.
+#' The call to the adam datasets is necessary as `CHG` data were not included
+#' in the MAE (it would be possible to add it there but I wonder what would
+#' be the consequences in terms of analysis result of adding theme).
+#'
+#' @note Initially prepared for WGCNA, it was evidenced it is more generally
+#' applied for a recurrent contrast (baseline data and training-induced
+#' variations.
+#'
+#' @return
+#' Every item of the list is a set of expression data and clinical
+#' parameters (aka traits).
+#' Item a: 
+#' baseline feature expression and clinical parameter.
+#' Item b: 
+#' training-induced expression variation profile across
+#' all samples (arm blind).
+#'
+#' @importFrom stats reshape
+#' @importFrom SummarizedExperiment assay
+#' @export
+#'
+vst_norm <- function(
+  mae,
+  adam = list(
+    adsl = adsl,
+    adlb = adlb,
+    advs = advs
+    ),
+  assay = c("allmirna", "mrna")) { 
+
+  assay <- match.arg(assay)
+
+  # Expressions as in DE: the data preparation stems from the differential
+  # expression preparation function.
+  data_as_de <- lapply(
+    X = setNames(nm = assay),
+    mae = mae,
+    FUN = function(x, mae) {
+      lapply(
+        X = c(Training_all = list(
+            c(levels(MultiAssayExperiment::colData(mae)$AVISIT), "no-arm")
+            )),
+        mae = mae,
+        assay = x,
+        control = control_rna(verbose = TRUE),
+        FUN = prepare_de
+      )
+    }
+  )
+
+  # Instead of model fit, get the vst transformed results.
+  gc(reset = TRUE)
+  get_vst <- function(x, assay) {
+    x$vst <- DESeq2::varianceStabilizingTransformation(x$dds, blind = FALSE)
+    x$mae[[assay]] <- SummarizedExperiment::assay(x$vst)
+    x
+  }
+  vst <- get_vst(x = data_as_de[[assay]]$Training_all, assay = assay)
+
+  result <- list()
+
+  # First item
+  y <- vst$mae
+  y <- y[,
+    MultiAssayExperiment::colData(y)$AVISIT == "BASELINE" &
+      MultiAssayExperiment::colData(y)$ARMCD %in% c("NGT", "T2D"),
+    ]
+  expr <- t(y[[assay]])
+  traits <- MultiAssayExperiment::colData(y)
+  traits <- traits[
+    !colnames(traits) %in%
+      c(
+        "SUBJID", "AVISIT", "sample", "AVISITNUM", "USUBJID", "SEX", "ARM",
+        grep(pattern = "^.*SC$", x = names(traits), value = TRUE)
+      )
+    ]
+  traits <- data.frame(
+    lapply(traits, function(x) as_scaled_numeric(x)),
+    row.names = row.names(traits)
+  )
+  assertthat::assert_that(all(rownames(traits) == rownames(expr)))
+  result$a <-  list(
+    expr = expr,
+    traits = traits
+  )
+
+  # Second item
+  # Expression From VST.
+  assertthat::assert_that(
+    all(table(MultiAssayExperiment::colData(vst$mae)$USUBJID) == 2)
+  )
+  subj <- unique(MultiAssayExperiment::colData(vst$mae)$USUBJID)
+  ls_avisit <- MultiAssayExperiment::colData(vst$mae)
+  ls_avisit <- as.data.frame(ls_avisit)
+  ls_avisit <- split(ls_avisit, f = ls_avisit$AVISIT)
+  bl <- rownames(ls_avisit$BASELINE)[match(subj, ls_avisit$BASELINE$USUBJID)]
+  m3 <- rownames(ls_avisit$`MONTH 3`)[match(subj, ls_avisit$`MONTH 3`$USUBJID)]
+  expr <- vst$mae[[assay]]
+  expr <- expr[, m3] - expr[, bl]
+  expr <- t(expr)
+  rownames(expr) <- gsub(
+    pattern = "^(X[0-9]*)v.*$",
+    x = rownames(expr),
+    replacement = "\\1"
+  )
+
+  # Traits CHG.
+  # Long-format ADaM, key is UBSUJID x AVISIT.
+  # Lab test data are added.
+  adsl <- adam$adsl
+  adlb <- adam$adlb
+  advs <- adam$advs
+
+  anl <- adlb[
+    adlb$AVISIT == "MONTH 3" &
+      adlb$PARAMCD %in% c(
+        "CHOL", "HBA1C", "HDL", "HOMAB", "HOMAIR", "LDL", "MATSUDA", "TRIG"
+        ),
+      ]
+  anl <- stats::reshape(
+    data = anl[c("USUBJID", "PARAMCD", "CHG", "PCHG")],
+    v.names = c("CHG", "PCHG"),
+    timevar = "PARAMCD",
+    idvar = "USUBJID",
+    direction = "wide"
+  )
+  adam <- merge(
+    x = adsl[c(
+      "USUBJID", "SUBJID", "AGE", "SEX", "ARM", "ARMCD",
+      "T2DFH", "NTRAIN"
+      )],
+    y = anl,
+    by = "USUBJID"
+  )
+
+  # Add the timepoint-defined LB data.
+  anl <- adlb[
+    adlb$AVISIT == "MONTH 3" &
+      adlb$PARAMCD %in% c("GLUC", "INSULIN"),
+    ]
+  anl$PARAMCD <- paste(# nolint
+    anl$PARAMCD, anl$ATPTNUM, sep = "_"
+  )
+  anl <- stats::reshape(
+    data = anl[c("USUBJID", "PARAMCD", "CHG", "PCHG")],
+    v.names = c("CHG", "PCHG"),
+    timevar = "PARAMCD",
+    idvar = "USUBJID",
+    direction = "wide"
+  )
+  adam <- merge(x = adam, y = anl, by = "USUBJID")
+
+  # Vital Sign data are added.
+  anl <- stats::reshape(
+    data = advs[
+      advs$AVISIT == "MONTH 3",
+      c("USUBJID", "PARAMCD", "CHG", "PCHG")],
+    v.names = c("CHG", "PCHG"),
+    timevar = "PARAMCD",
+    idvar = "USUBJID",
+    direction = "wide"
+  )
+  adam <- merge(x = adam, y = anl, by = "USUBJID")
+
+  # Clean ADaM names.
+  colnames(adam) <- gsub(
+    pattern = "^CHG\\.(.*)$",
+    x = colnames(adam),
+    replacement = "\\1"
+  )
+  colnames(adam) <- gsub(
+    pattern = "^PCHG\\.(.*)$",
+    x = colnames(adam),
+    replacement = "\\1_PCHG"
+  )
+  adam$ARMCD <- as.factor(adam$ARMCD)# nolint
+
+  # Traits matrix (numeric).
+  assertthat::assert_that(max(table(adam$USUBJID)) == 1)
+  traits <- adam[match(subj, adam$USUBJID), ]
+  rownames(traits) <- traits$SUBJID
+  traits <- traits[
+    !colnames(traits) %in% c("SUBJID", "USUBJID", "SEX", "ARM")
+    ]
+  traits <- data.frame(
+    lapply(traits, function(x) as_scaled_numeric(x)),
+    row.names = row.names(traits)
+  )
+
+  assertthat::assert_that(all(rownames(traits) == rownames(expr)))
+  result$b <- list(
+    expr = expr,
+    traits = traits
+  )
+
+  result
+}
+
+besd_wgcna <- vst_norm(mae = besd_mae, assay = "mrna")
+   
+assertthat::assert_that(
+  all(
+    sapply(
+      besd_wgcna,
+      function(x) 
+        WGCNA::goodSamplesGenes(x$expr, verbose = 0)$allOK
+    )
+  )
+)
+
+#' Add clust_ind to besd_wgcna.
+besd_wgcna <- lapply(
+  besd_wgcna,
+  function(x) {
+    x$clust_ind <- hclust(dist(x$expr), method = "complete")
+    x
+  }
+)
+
+besd_wgcna$a$sft_val <- 15
+besd_wgcna$b$sft_val <- 6
+besd_wgcna  <- lapply(besd_wgcna, wrap_sft)
+
+gc(); gc(reset = TRUE)
+
+#' @describeIn wrap_wgcna add `sft` to `besd_wgcna`;
+#'   semi-automatic procedure for sft.
+#' @export
+#'
+wrap_sft <- function(x) {
+  sft_power <- unique(c(seq_len(10), seq(10, 30, 2), x$sft_val))
+  sft_power <- sft_power[order(sft_power)]
+  x$sft <- WGCNA::pickSoftThreshold(
+    x$expr,
+    powerVector = sft_power,
+    verbose = 5
+  )
+  x
+}
+
+#' @describeIn wrap_wgcna plot the soft-threshold determining procedure.
+#' @import ggplot2
+#' @export
+#'
+wrap_gg_sft <- function(x) {
+  dta <- x$sft$fitIndices
+  dta$signed_rsq <- -1 * sign(dta$slope) * dta$SFT.R.sq
+  dta <- tidyr::pivot_longer(
+    dta[c("Power", "signed_rsq", "mean.k.")],
+    cols = c("signed_rsq", "mean.k."),
+    names_to = "criteria",
+    values_to = "value"
+  )
+  dta$criteria <- factor(
+    dta$criteria,
+    levels = c("signed_rsq", "mean.k."),
+    labels = c("Scale independence", "Mean connectivity")
+  )
+
+  dta_hline <- data.frame(
+    criteria = factor(
+      levels(dta$criteria)[1],
+      levels = levels(dta$criteria)
+      ),
+    yintercept = 
+      dta$value[dta$criteria == levels(dta$criteria)[1] & dta$Power == x$sft_val],
+    x = x$sft_val
+  )
+  ggplot(
+    data = dta,
+    mapping = aes_string(x = "Power", y = "value", label = "Power")
+    ) + geom_hline(
+    data = dta_hline,
+    mapping = aes_string(yintercept = "yintercept")
+    ) + geom_line(
+    color = "gray60", lty = 2
+    ) + geom_text(
+    ) + geom_label(
+    data = dta_hline,
+    mapping = aes_string(y = "yintercept", x = "x", label = "x")
+    ) + facet_wrap(
+    criteria ~  ., scales = "free", ncol = 2
+  )
+}
+
+#' @describeIn wrap_wgcna add `wgcna` to `besd_wgcna`.
+#' @param data (`list`)\cr expression profile.
+#' @param control (`list`)\cr control as prepared by [control_wgcna()].
+#' @importFrom stats cor
+#' @export
+#'
+estimate_wgcna <- function(
+  data,
+  control = control_wgcna()) {
+
+  if (control$verbose) cat("\n----Adjacency: \n")
+  if (control$corFnc == "bicor") bicor <- WGCNA::bicor
+  adj <- WGCNA::adjacency(
+    datExpr = data,
+    power = control$power,
+    type = control$type,
+    corFnc = control$corFnc
+  )
+
+  # Turn adjacency into topological overlap
+  if (control$verbose) cat("\n----TOM: \n")
+  TOM <-  WGCNA::TOMsimilarity(
+    adjMat = adj,
+    TOMType = control$TOMType
+  )
+  dissTOM <- 1 - TOM
+
+  # Call the hierarchical clustering function
+  if (control$verbose) cat("\n----hclust: \n")
+  dendro <- stats::hclust(stats::as.dist(dissTOM), method = "average")
+
+  # Module identification using dynamic tree cut:
+  if (control$verbose) cat("\n----cutreeDynamic: \n")
+  # We like large modules, so we set the minimum module size relatively high:
+  dynamicMods <- dynamicTreeCut::cutreeDynamic(
+    dendro = dendro,
+    distM = dissTOM,
+    cutHeight = control$cutHeight,
+    method = "hybrid",
+    deepSplit = control$deepSplit,
+    pamRespectsDendro = FALSE,
+    minClusterSize = control$minClusterSize
+  )
+
+  # Convert numeric lables into colors
+  dynamicColors <- WGCNA::labels2colors(dynamicMods)
+
+  # Calculate eigengenes
+  MEList <- WGCNA::moduleEigengenes(expr = data, colors = dynamicColors)
+  MEs <- MEList$eigengenes
+
+  # Calculate dissimilarity of module eigengenes
+  MEDiss <- 1 - cor(MEs);
+  # Cluster module eigengenes
+  METree <- stats::hclust(stats::as.dist(MEDiss), method = "average")
+
+  # Call an automatic merging function
+  merge <- WGCNA::mergeCloseModules(
+    data,
+    dynamicColors
+  )
+
+  color_group <- cbind(
+    "Dynamic Tree Cut" = dynamicColors,
+    "Merged dynamic" = merge$color
+  )
+  list(
+    dendro = dendro,
+    colors = color_group,
+    mod_merge = merge,
+    MEs = MEs
+  )
+}
+
+#' @describeIn wrap_wgcna convenient Controls
+#' @inheritParams WGCNA::adjacency
+#' @inheritParams WGCNA::TOMsimilarity
+#' @inheritParams dynamicTreeCut::cutreeDynamic
+#' @inheritParams WGCNA::mergeCloseModules
+#' @export
+#'
+control_wgcna <- function(
+  power,
+  type = "signed",
+  TOMType = "signed",
+  corFnc = c("pearson" = "cor", "bicor" = "bicor")[1], 
+  deepSplit = 1, # wa 2 for Medium sensitivity
+  cutHeight = 0.995, # Default 0.995
+  minClusterSize = 20, # min(20, ncol(datExpr)/2 ) 
+  verbose = TRUE
+  ) {
+  as.list(environment())
+}
+
+besd_wgcna <- lapply(
+  X = besd_wgcna,
+  FUN = function(x) {
+    x$wgcna <- estimate_wgcna(
+      data = x$expr,
+      control = control_wgcna(power = x$sft_val)
+    )
+    gc(); gc(reset = TRUE)
+    x
+  }
+)
+
+```
+
+#### Data preparation
+
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
+```

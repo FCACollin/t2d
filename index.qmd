@@ -13,3 +13,37 @@ Development version:
 
 Outputs will be included and made available within the program if the
 associated manuscript is accepted for publication in peer-review journal.
+
+## Analysis Environment
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU))
+and complemented by Bioconductor packages (release 3.15):
+
+- `BiocParallel`
+- `car` for regression model test [version 3.0-13, @Fox2019]
+- `cowplot`
+- `DESeq2` for differential expression analysis and
+  variance stabilizing transformation [version 1.36.0, @Love2014]
+- `emmeans` for least-Squares Means (LSM) estimations [version 1.7.3, @Lenth2022]
+- `flextable` for output table formatting [version 0.7.0, @Gohel2022]
+- `ggplot2` for graphics [version 3.3.6, @Wickham2016]
+- `hexbin`
+- `lintr`
+- `missMDA`
+- `multcomp`
+- `multcompView`
+- `MultiAssayExperiment` for management of multi-omics experiment objects
+  [version 1.22.0, @Ramos2017]
+- `tidyr` for data wrangling [version 1.2.0, @Wickham2022].
+
+
+To install:
+
+- WGCNA
+- dynamicTreeCut
+
+The computational environment was containerized into a Docker image build upon
+`rocker/verse:4.2.0`.
