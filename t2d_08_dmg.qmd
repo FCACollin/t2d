@@ -7,11 +7,36 @@ date: "`r format(Sys.time(), '%Y-%m-%d')`"
 
 ## Demographics and Baseline Anthropometrics
 
+Demographics data characterized the diabetes groups in terms of age, number of
+training composing the exercise intervention, BMI and diet at baseline. This
+was completed by a fine description of the baseline anthropometrics leading
+differences between diabetes groups. Both characterizations relied on one-way
+analysis of variance, the diabetes effect significance was ruled by a Fisher
+test, least mean square estimations were obtained for every diabetes group
+along with their 95% confidence interval, and pairwise difference estimation
+and significance relied on Tukey’s method.
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `car` for regression model test [version 3.0-13, @Fox2019]
+- `emmeans` for least-Squares Means (LSM) estimations [version 1.7.3, @Lenth2022]
+- `flextable` for output table formatting [version 0.7.0, @Gohel2022]
+- `tidyr` for data wrangling [version 1.2.0, @Wickham2022].
+
+
 Target:
 
 - [x] Table: Demographics and baseline anthropometrics are tested via an Anova.
 - [x] Supp. Table: Post-hoc estimations / tests by diabetes groups.
 - [x] Supp. Table: extension of the anova to additional ADVS/ADLB parameters.
+
+Specifications:
+
+- Variable [order](https://docs.google.com/document/d/1zTa6J7NO-Wt_wx5Wqq574E_VcCt7lg-75Nt5BqbLApw/edit?usp=sharing)
+
 
 ```{r, settings}
 params <- yaml::read_yaml("_prog.yml")
@@ -111,8 +136,7 @@ lsm_by_param <- function(x, indep_var = "diabcd_n") {
     x,
     \(x) {
       mod_em <- emmeans::emmeans(x$lm, specs = make_specs(indep_var))
-      y <- multcomp::cld(mod_em, Letters = letters)
-      y <- as.data.frame(y)
+      y <- as.data.frame(mod_em)
       cbind(
         paramcd = unique(x$data$paramcd),
         y,
@@ -189,7 +213,7 @@ tab_08_01_ft <- tab_08_01 |>
       "Tab 08 01 - Analysis of Variance / Least Means Square estimations
       (95% Confidence Interval) of Demographics Parameters and Baseline
       Anthropometrics by Diabetes Group"
-  )
+    )
   ) |>
   footnote(
     part = "header",
@@ -276,35 +300,23 @@ tab_08_02_ft <- tab_08_02 |>
   flextable() |>
   fontsize(size = 9, part = "all") |>
   autofit() |>
-    add_header_lines(
+  add_header_lines(
     "Analysis Set: Full Analysis Set - Observed Cases at baseline"
   ) |>
   set_caption(
     caption = wrap_long_lines(
       "Tab 08 02 - Post-hoc tests for the Analysis of Variance of
       Demographics and Baseline Anthropometrics by Diabetes Group"
-  )
+    )
   ) |>
-  footnote(
-    value = as_paragraph(wrap_long_lines(
-      "CL, 95% Confidence Limit; SE, Standard Error."
-    )),
-    ref_symbols = ""
-  ) |>
-  footnote(
-    value = as_paragraph(wrap_long_lines(
+  add_footer_lines(c(
+    "CL, 95% Confidence Limit; SE, Standard Error.",
+    wrap_long_lines(
       "Note: P value adjustment by Tukey's method for comparing a family of
       3 estimates."
-    )),
-    ref_symbols = ""
-  )|>
-    footnote(
-    value = as_paragraph(wrap_long_lines(
-      "Source: ADSL and ADVS/ADLB observed cases at
-      baseline."
-    )),
-    ref_symbols = ""
-  ) |>
+    ),
+    "Source: ADSL and ADVS/ADLB observed cases at baseline." 
+  )) |>
   theme_booktabs()
 
 tab_08_02_ft
@@ -387,7 +399,7 @@ tab_08_03_ft <- tab_08_03 |>
       "Tab 08 03 - Analysis of Variance / Least Means Square estimations
       (95% Confidence Interval) of Demographics Parameters and Baseline
       Anthropometrics by Diabetes Group for Supplementary Parameters"
-  )
+    )
   ) |>
   footnote(
     part = "header",
@@ -397,12 +409,7 @@ tab_08_03_ft <- tab_08_03 |>
     ),
     ref_symbols = "a"
   ) |>
-  footnote(
-    value = as_paragraph(
-      "Source: ADSL and ADVS/ADLB observed cases at baseline."
-    ),
-    ref_symbols = ""
-  ) |>
+  add_footer_lines("Source: ADSL and ADVS/ADLB observed cases at baseline.") |>
   theme_booktabs()
 tab_08_03_ft
 ```
@@ -449,7 +456,7 @@ tab_08_04_raw <- ads |>
   ) |>
   (\(x) split(x, f = x$paramcd, drop = TRUE))() |>
   lm_by_paramcd(indep_var = "diabcd") |>
-  lsm_pairs_by_param(indep_var = "diabcd")  |>
+  lsm_pairs_by_param(indep_var = "diabcd") |>
   (\(x) Reduce(rbind, x))()
 
 library(tidyr)
@@ -474,14 +481,14 @@ tab_08_04_ft <- tab_08_04 |>
   flextable() |>
   fontsize(size = 9, part = "all") |>
   autofit() |>
-    add_header_lines(
+  add_header_lines(
     "Analysis Set: Full Analysis Set - Observed Cases at baseline"
   ) |>
   set_caption(
     caption = wrap_long_lines(
       "Tab 08 04 - Post-hoc tests for the Analysis of Variance of
       Demographics and Baseline Anthropometrics by Diabetes Group"
-  )
+    )
   ) |>
   footnote(
     value = as_paragraph(wrap_long_lines(
@@ -496,7 +503,7 @@ tab_08_04_ft <- tab_08_04 |>
     )),
     ref_symbols = ""
   )|>
-    footnote(
+  footnote(
     value = as_paragraph(wrap_long_lines(
       "Source: ADSL and ADVS/ADLB observed cases at
       baseline."
@@ -533,3 +540,10 @@ file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
   message("[output] Table saved as ", .) %>%
   write.csv(tab_08_04, file = ., row.names = FALSE)
 ```
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
+```
+

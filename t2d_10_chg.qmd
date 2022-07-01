@@ -1,0 +1,231 @@
+---
+title: "Anthropometrics Change From Baseline - Anova"
+subtitle: Program 10
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+---
+
+## Introduction
+
+The results from program 09 ("_Analysis of Covariance / Least Means Square
+estimations of Anthropometrics Changes from Baseline by Diagnosis Group at
+Month 3 (95% Confidence Interval) Adjusted for Baseline_") raises questions
+about the interpretation of the diagnostic group effect once the baseline
+effect in deduced.
+
+Diabetes group estimations in anthropometrics changes from baseline were
+obtained and tested by analysis of variance models (anova), relying once
+more on the Fisher test.
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `car` for regression model test [version 3.0-13, @Fox2019]
+- `emmeans` for least-Squares Means (LSM) estimations [version 1.7.3, @Lenth2022]
+- `flextable` for output table formatting [version 0.7.0, @Gohel2022]
+- `tidyr` for data wrangling [version 1.2.0, @Wickham2022].
+
+## Settings
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+source("R/inches.R")
+
+knitr::opts_chunk$set(results = params$knitr$results)
+```
+
+## data
+
+```{r, adam}
+#| code-fold: show
+adsl <- dbs.data::adsl
+advs <- dbs.data::advs
+adlb <- dbs.data::adlb
+```
+
+```{r, ads}
+ads <- adlb |>
+  rbind(advs) |>
+  subset(basetype == "" & avisit != "Baseline") |>
+  subset(select = c(subjid, paramcd, avisit, base, chg)) |>
+  (\(x) merge(x = adsl[c("subjid", "diabcd")], y = x, by = "subjid"))() |>
+  (\(df, fct = "diabcd") {
+    df[paste0(fct, "_n")] <- factor_n(df, fct, id = "subjid", sep = " ")
+    df
+  })()
+
+head(ads)
+```
+
+## Example
+
+```{r}
+library(ggplot2)
+dbs.data::adlb |>
+  subset(paramcd == "GLU120" & dtype == "") |>
+  within(time <- c(Baseline = 0, "Month 3" = 3)[avisit]) |>
+  merge(x = adsl[c("subjid", "diabcd")], y = _, by = "subjid") |>
+  ggplot(aes(time, aval)) +
+  geom_point() +
+  geom_line(aes(group = subjid)) +
+  ggtitle("Glucose 120 by visit and treatment group") +
+  geom_smooth(method = "lm", color = "blue") +
+  facet_grid(. ~ diabcd)
+```
+
+## Helper functions
+
+```{r, extra_functions}
+format_pval <- function(x) {
+  p <- round(x, 5)
+  ifelse(
+    test = p < 0.0001,
+    yes = "<0.0001",
+    no = ifelse(
+      test = p < 0.001,
+      yes = format(round(p, 4), nsmall = 4),
+      no = ifelse(
+        test = p < 0.01,
+        yes = format(round(p, 3), nsmall = 3),
+        no = format(round(p, 2), nsmall = 2)
+      )
+    )
+  )
+}
+
+lm_by_paramcd <- function(x,
+                          dep_var = "aval",
+                          indep_var = "diabcd_n",
+                          covariate = NULL) {
+  
+  formula <- paste(
+    dep_var, "~", 
+    if (!is.null(covariate)) paste(covariate, "+"),
+    indep_var
+  )
+  formula <- as.formula(formula)
+  
+  lapply(x, \(x) list(data = x, lm = lm(formula, data = x)))
+}
+
+make_specs <- function(var) as.formula(paste("~", var))
+lsm_by_param <- function(x, indep_var = "diabcd_n") {
+  lapply(
+    x,
+    \(x) {
+      mod_em <- emmeans::emmeans(x$lm, specs = make_specs(indep_var))
+      y <- as.data.frame(mod_em)
+      cbind(
+        paramcd = unique(x$data$paramcd),
+        y,
+        diabcd_f = car::Anova(x$lm)[indep_var, "Pr(>F)"]
+      )
+    }
+  )
+}
+```
+
+## Tab 10 01 - Anova - Anthropometrics Changes from Baseline by Diabetes Group
+
+```{r}
+tab_10_01_raw <- ads |>
+  (\(x) split(x, f = x$paramcd))() |>
+  lm_by_paramcd(dep_var = "chg", indep_var = "diabcd_n") |>
+  lsm_by_param(indep_var = "diabcd_n") |>
+  (\(x) Reduce(rbind, x))()
+ 
+tab_10_01 <- tab_10_01_raw |>
+  (\(df) df[order(df$diabcd_n), ])() |>
+  within({
+    val <- paste0(
+      signif(emmean, 3),
+      " (", signif(lower.CL, 3), ", ", signif(upper.CL, 3), ")"
+    )
+    pval <- format_pval(diabcd_f)
+  }) |>
+  tidyr::pivot_wider(
+    id_cols = c("paramcd", "pval", "diabcd_f"),
+    values_from = "val",
+    names_from = "diabcd_n"
+  ) |>
+  (\(x) x[order(x$diabcd_f), ])()
+tab_10_01
+```
+
+```{r}
+library(flextable)
+wrap_line <- function(x) paste(strwrap(x, width = 80), collapse = " ")
+tab_10_01_ft <- tab_10_01 |>
+  subset(select = -diabcd_f) |>
+  flextable() |>
+  autofit() |>
+  footnote(
+    value = as_paragraph(
+      "Note: rows are ordered by increasing p values, most significant on top."
+    ),
+    ref_symbols = ""
+  ) |>
+  footnote(
+    part = "header",
+    i = 1, j = 2,
+    value = as_paragraph(
+      "Note: pval, p value of diabetes group effect test by F test."
+    ),
+    ref_symbols = "a"
+  ) |>
+  footnote(
+    value = as_paragraph(wrap_line(
+      "Source: Full Analysis Set, observed cases at baseline and post
+      intervention."
+    )),
+    ref_symbols = ""
+  ) |>
+  add_header_lines(wrap_long_lines(
+    "Analysis Set: Full Analysis Set - Observed Cases"
+  )) |>
+  set_caption(
+    caption =  wrap_long_lines(
+      "Tab 10 01 - Analysis of variance / Least Means Square estimations
+      of Anthropometrics Changes from Baseline by Diagnosis Group at
+      Month 3 (95% Confidence Interval)"
+    )
+  ) |>
+  theme_booktabs()
+tab_10_01_ft
+```
+
+```{r}
+bnm <- "tab_10_01"
+dir_tab <- params$paths$tab
+dir_dta <- params$paths$dta
+
+file.path(dir_tab, paste0(bnm, "_ft.RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_10_01_ft, file = .)
+
+file.path(dir_dta, paste0(bnm, ".RData")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save(tab_10_01, file = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "docx")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_docx(tab_10_01_ft, path = .)
+
+file.path(dir_tab, paste(bnm, sep = ".", "html")) %T>%
+  message("[output] Table saved as ", .) %>%
+  save_as_html(tab_10_01_ft, path = .)
+
+file.path(dir_dta, paste(bnm, sep = ".", "csv")) %T>%
+  message("[output] Table saved as ", .) %>%
+  write.csv(tab_10_01, file = ., row.names = FALSE)
+```
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
+```

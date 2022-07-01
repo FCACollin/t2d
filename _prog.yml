@@ -1,5 +1,7 @@
 
 version: 0.1.0-alpha
+dock:
+  version: 0.1.0-alpha
 knitr:
   results: hide # markup, asis, hold, hide
 paths:
@@ -16,8 +18,12 @@ rna:
   cpm_threshold:
     mrna: 2
     allmirna: 2
+    fraccol: .5
   depth_threshold:
-    mrna: 15000000
+    mrna: 13000000
     allmirna: 5000000
   mingeneinset_gsea: 3
   n_rand_gsea: 1e4
+  wgcna:
+    sft:
+      allmirna: 5

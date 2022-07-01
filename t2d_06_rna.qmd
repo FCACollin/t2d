@@ -5,6 +5,9 @@ author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d')`"
 ---
 
+```{r, params}
+params <- yaml::read_yaml("_prog.yml")
+```
 
 ## RNA Seq - Local Study of Confounder Adjustment's Impact
 
@@ -17,17 +20,9 @@ Target:
 
 
 ```{r, settings}
-params <- if (exists("params")) {
-  c(params, yaml::read_yaml("_prog.yml"))
-} else {
-  yaml::read_yaml("_prog.yml")
-}
-
 devtools::load_all("src/pkg/dbs.data")
 devtools::load_all("src/pkg/latarnia.utils")
-
 knitr::opts_chunk$set(results = params$knitr$results)
-
 library(assertthat)
 source("R/ngs.R")
 ```
@@ -437,7 +432,7 @@ p <- clean_slate() |>
   add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
   add_title(
     c(
-      "Figure 1",
+      "Figure 6.1",
       strwrap(
         "Volcano plot - Level and significance of Differential Expression among
         all miRNA at Baseline between T2D and NGT", width = 80
@@ -480,4 +475,10 @@ export_as(
 #| fig-height: 11.7
 
 show_slate(p)
+```
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
 ```
