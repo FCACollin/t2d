@@ -9,3 +9,4 @@ extdata
 *.bak
 *draft*
 /core
+*_files

@@ -9,8 +9,73 @@ always_allow_html: true
 
 ## mRNA Seq - WGCNA
 
+> "_The Weighted Correlation Network Analysis (WGCNA) [11,12] corresponds to a
+> data reduction method and unsupervised classification method. It simplifies
+> the interpretation of thousands of gene responses to a dozen of synthetic
+> groups (or modules) of genes. The net establishes connections between
+> genes-genes are connected if their expression is correlated. Genes can be
+> more or less intensively connected depending on the value of the correlation
+> (the weights). The connectivity between genes is then interpreted into a
+> distance, and the distance is used to group genes into modules. This is how a
+> high number of genes can be reduced into a small number of clusters whose
+> expression is quantified by the Eigengenes (first principal component within
+> the module). It relies on the assumption that highly correlated genes within
+> a module are involved in common biological processes._" @Niemira2020
+
+Two gene co-expression networks were obtained, 1) the first one based on
+baseline samples for NGT and T2D subject samples and
+2) the second on training-induced expression variation independently from the
+study arm. In detail:
+
+1. baseline samples for NGT and T2D were selected, the same inclusion criteria 
+   as in the section "_Differential expression analysis_" were used.
+   Gene expression was transformed using variance
+   stabilizing transformation. The optimal soft-threshold adjacency matrix
+   was graphically determined, then the network was estimated resulting in
+   gene modules and corresponding Eigengenes. The `cutreeDynamic` algorithm
+   was used for tree pruning of the gene hierarchical clustering dendrogram
+   resulting in co-expression modules; correlated modules (r > 0.80) were
+   merged. The quantitative clinical parameters were centred to the average and
+   scaled-to-variance while factors were decomposed into dummy variables
+   so as to study the association between gene modules and clinical traits
+   quantified with Pearson's correlation coefficient. 
+2. training-induced variation was studied similarly, the approach above was
+   applicable here also, using the difference between variance-stabilizing
+   transformed expression matrix as input to the procedure.
+
+Note: it is not possible to use the differentially expressed genes as a
+starting point. The WGCNA method includes a disclaimer preventing the
+use of pre-filtered / selected genes based on DEG analysis result.
+
+The module identification was followed by gene set enrichment analysis. To do
+so, the correlation between gene expression (Variance-Stabilized Transformed
+values, VST) and the eigengene estimated in every module was used as a 
+measure of module membership. Then, for every module, genesets as defined
+by the Gene Ontology (GO) project were selected if at least 10 genes belonged
+to the module. Then, the GSEA procedure was run while considering
+all expressed genes with existing _entrez gene_ id and determining an
+enrichment score and associated p.value based on 10000 random permutations.
+The result focused specifically on enriched and up-regulated genesets, i.e.
+genesets with over representation of genes with higher
+correlation with the eigengene within each module.
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `MultiAssayExperiment` for management of multi-omics experiment objects
+  [version 1.22.0, @Ramos2017]
+- `DESeq2` for differential expression analysis and
+  variance stabilizing transformation [version 1.36.0, @Love2014]
+- `cowplot` for figure composition [version 1.1.1, @Wilke2020]
+- `ggplot2` for graphics [version 3.3.6, @Wickham2016]
+
+
+
 ```{r, cfg_prog}
 cfg_prog <- yaml::read_yaml("_prog.yml")
+cfg_prog
 ```
 
 ```{r, settings}
@@ -22,15 +87,6 @@ knitr::opts_chunk$set(results = cfg_prog$knitr$results)
 source("R/ngs.R")
 source("R/inches.R")
 ```
-
-
-The analysis was realized with R [v4.2.0, @RCT2022]. Note the
-use of the additional packages downloaded from the RStudio package manager
-repository (freeze date 2022-05-04, [repos](
-https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
-
-- `DESeq2` for differential expression analysis and
-  variance stabilizing transformation [version 1.36.0, @Love2014]
 
 ### Materials and Methods
 
@@ -169,19 +225,23 @@ dta <- besd_mae |>
     mae
   })()
 
-
 #' WGCNA Expression data.
 #'
 #' A matrix or data frame in which columns are genes and rows ar samples.
 #'
 dta_expr <- t(dta[[ngs_assay]])
 assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
+
+dta_traits <- colData(dta)
+dta_traits$x <- rownames(dta_traits)
+dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
+dta_traits <- as.data.frame(dta_traits)
 ```
 
 ### Sample clustering
 
 ```{r, sample_clustering, eval=TRUE}
-spl_clust <- hclust(dist(dta_expr), method = "average")
+spl_clust <- hclust(dist(dta_expr), method = "complete")
 
 # Clustering Dendrogram of samples based on their Euclidean distance
 theme_custom <- function(...) {
@@ -211,10 +271,6 @@ p1 <- ggplot(ggdendro::segment(ddata)) +
   ) +
   theme_custom(axis.text.y = element_text())
 
-dta_traits <- colData(dta)
-dta_traits$x <- rownames(dta_traits)
-dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
-dta_traits <- as.data.frame(dta_traits)
 
 p2 <- ggplot(
   dta_traits,
@@ -261,7 +317,13 @@ p <- clean_slate() |>
       and trait heatmap"
     )
   )) |>
-  add_figure(p, height = inches(5))
+  add_figure(p, height = inches(5)) |>
+  add_note(c(
+    "Note: VST transformed expression matrix used to estimate distances
+    between samples, _complete_ method was used for the hierarchical
+    clustering."
+  ))
+  
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
@@ -283,7 +345,7 @@ sft <- pickSoftThreshold(
 )
 
 library(ggplot2)
-pwr <- cfg_prog$rna$wgcna$sft$allmirna
+pwr <- cfg_prog$rna$wgcna$baseline$allmirna$adjacency$power
 p1 <- ggplot(
   sft$fitIndices,
   aes(
@@ -363,52 +425,212 @@ show_slate(p)
 ### Gene clustering
 
 ```{r}
-pwr <- cfg_prog$rna$wgcna$sft$allmirna
-adjc <- adjacency(dta_expr, power = pwr)
+cfg <- cfg_prog$rna$wgcna$baseline$allmirna
 
-# Turn adjacency into topological overlap
-tom <- TOMsimilarity(adjc)
-diss_tom <- 1 - tom
+# gene dissimilarity
+tom_dis <- dta_expr |>
+  adjacency(
+    type = cfg$adjacency$type,
+    power = cfg$adjacency$power,
+    corFnc = cfg$adjacency$cor_fn$value
+  ) |>
+  TOMsimilarity(TOMType = cfg$tom$type) |>
+  (\(tom) 1 - tom)()
 
-gene_hc <- hclust(as.dist(diss_tom), method = "average")
+gene_hc <- tom_dis |>
+  as.dist() |>
+  hclust(method = "average")
 
-# We like large modules, so we set the minimum module size relatively high:
-minModuleSize <- 30
+# gene clustering
+dyn_mod <- cutreeDynamic(
+  gene_hc,
+    cutHeight = cfg$cuttree$cut_height,
+    minClusterSize = cfg$cuttree$min_cluster_size,
+    method = "hybrid",
+    distM = tom_dis,
+    deepSplit = cfg$cuttree$deep_split,
+    pamRespectsDendro = FALSE
+  )
+dyn_col <- labels2colors(dyn_mod)
 
-# Module identification using dynamic tree cut:
-dyn_mods <- cutreeDynamic(
-  dendro = gene_hc,
-  distM = diss_tom,
-  deepSplit = 2,
-  pamRespectsDendro = FALSE,
-  minClusterSize = minModuleSize
-)
-table(dyn_mods)
-
-# Convert numeric lables into colors
-dyn_col <- labels2colors(dyn_mods)
-table(dyn_col)
+# me: module eigengenes (also used to merge dyn_col)
+dyn_mge <- dta_expr |> WGCNA::mergeCloseModules(dyn_col)
+meig_ls <- dta_expr |> moduleEigengenes(dyn_col)
+meig <- meig_ls$eigengenes
+meig_dis <- 1 - cor(meig)
+meig_hc <- meig_dis |> as.dist() |> hclust(method = "average")
 ```
-
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
-# Plot the dendrogram and colors underneath
-plotDendroAndColors(
-  gene_hc,
-  dyn_col,
-  "Dynamic Tree Cut",
-  dendroLabels = FALSE, hang = 0.03,
-  addGuide = TRUE, guideHang = 0.05,
-  main = "Gene dendrogram and module colors"
+WGCNA::plotDendroAndColors(
+  dendro = gene_hc,
+  colors = dyn_mge$color,
+  dendroLabels = FALSE,
+  hang = -1,
+  addGuide = TRUE,
+  guideHang = 0.05,
+  groupLabels = "",
+  cex.rowText = 0.5,
+  cex.colorLabels = 0.5,
+  cex.dendroLabels = 0.9,
+  marAll = c(1, 1, 1, 1),
+  axes = FALSE,
+  ylab = NULL,
+  main = NULL
 )
-
-
+graphics::par(mfrow = c(1, 1))
 ```
+
+```{r}
+
+
+#' @describeIn wrap_wgcna improved correlation matrix.
+#' @param mat_y,mat_x the matrix used in rows or columns.
+#' @param draw (`logical`)
+#' @param newpage (`logical`)
+#' @import ggplot2
+#' @export
+#'
+gg_eigen <- function(mat_y, mat_x, draw = TRUE, newpage = FALSE) {
+
+  dta <- stats::cor(mat_y, mat_x, use = "pairwise.complete.obs")
+  dta <- reshape2::melt(
+    dta, varnames = c("eig", "traits"), value.name = "cor"
+  )
+  dta$cor_pval <- WGCNA::corPvalueStudent(dta$cor, nSamples = nrow(mat_x))
+
+  local_theme <- function(gg) {
+    gg + scale_x_continuous(
+      expand = c(0, 0.5)
+    ) + scale_y_continuous(
+      expand = c(0.02, 0)
+    ) + theme(
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      legend.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      panel.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      plot.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      )
+    )
+  }
+
+  dendro_y   <- stats::hclust(d = stats::as.dist(1 - stats::cor(mat_y)))
+  dendro_y   <- stats::as.dendrogram(dendro_y);
+  y_neworder <- labels(dendro_y)
+  dendro_y   <- ggdendro::ggdendrogram(
+    data = dendro_y, rotate = TRUE
+  ) + theme(
+    plot.margin = unit(c(0,0,0,-0.2), units="lines")
+  )
+  dendro_y <- local_theme(gg = dendro_y)
+
+  dendro_x <- stats::as.dist(1 - stats::cor(mat_x))
+  dendro_x <- stats::hclust(d = stats::dist(x = dendro_x))
+  dendro_x <- stats::as.dendrogram(dendro_x)
+  x_neworder <- labels(dendro_x)
+  dendro_x <- ggdendro::ggdendrogram(
+    data = dendro_x, rotate = FALSE
+  ) + theme(
+    plot.margin = unit(c(0,0,-.8,0), units="lines")
+  )
+  dendro_x <- local_theme(gg = dendro_x)
+
+  dta$traits <- factor(dta$traits, levels = x_neworder)
+  dta$eig <- factor(dta$eig, levels = y_neworder)
+
+  dta$cor_pval_2d <- round(dta$cor_pval, 2)
+  # Create heatmap plot
+  heatmap.plot <- ggplot(
+    data = dta,
+    mapping = aes_string(x = "traits", y = "eig")
+  ) + geom_tile(
+    data = dta, fill = "transparent", col = "gray"
+  ) + geom_tile(
+    # data = dta[dta$cor_pval < 0.1, ],
+    mapping = aes_string(fill = "cor")
+  ) + geom_text(
+    # data = dta[dta$cor_pval < 0.1, ],
+    mapping = aes_string(label = "cor_pval_2d"),
+    col = "white", size = 2
+  ) + scale_fill_continuous(
+    name = "Corr.",
+    guide = guide_colourbar(barheight = 10)
+  )+ coord_cartesian(
+    expand = FALSE
+  ) + theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    legend.position = "left",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.background = element_rect(
+      fill = "transparent", colour = "transparent"
+    ),
+    panel.background = element_rect(
+      fill = "transparent", colour = "transparent"
+    ),
+    plot.background = element_rect(
+      fill = "transparent", colour = "transparent"
+    ),
+    legend.key.width = grid::unit(.3, "cm"),
+  )
+
+  a1 <- ggplotGrob(heatmap.plot)
+  a2 <- ggplotGrob(dendro_y)
+  a <- cbind(a1, a2, size = "max")
+  b <- ggplot2::ggplotGrob(dendro_x)
+  b <- gtable::gtable_add_cols(
+    b,
+    widths = a1$widths[1:(length(a1$widths)-length(b$widths))],
+    pos = 0
+  )
+  b <- gtable::gtable_add_cols(b, widths = a2$widths, pos = -1)
+
+  ab <- rbind(b, a, size = "last")
+  ab <- rbind(b, a, size = "last", z = c(1,10))
+  ab$heights[7] <- unit(3, "lines")
+  ab$widths[16] <- unit(3, "lines")
+
+  if (draw) {
+    if (newpage) grid::grid.newpage()
+    grid::grid.draw(ab)
+  }
+
+  list(
+    gg = ab,
+    data = dta
+  )
+}
+
+gg_eigen(
+  dta_traits |>
+    subset(select = c(GLU120, diabcd)) |>
+    within(diabcd <- as.numeric(diabcd)),
+  meig
+)
+```
+
 
 #### Legacy
 
 ```{r, eval=FALSE, include=FALSE}
-
+control_wgcna <- function(
+  power,
+  type = "signed",
+  TOMType = "signed",
+  corFnc = c("pearson" = "cor", "bicor" = "bicor")[1], 
+  deepSplit = 1, # wa 2 for Medium sensitivity
+  cutHeight = 0.995, # Default 0.995
+  minClusterSize = 20, # min(20, ncol(datExpr)/2 ) 
+  verbose = TRUE
+  ) {
+  as.list(environment())
+}
 #' WGCNA Wrappers
 #' 
 #' Set of function for standardised pre/post processing of WGCNA results.

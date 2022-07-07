@@ -24,7 +24,7 @@ and complemented by Bioconductor packages (release 3.15):
 
 - `BiocParallel`
 - `car` for regression model test [version 3.0-13, @Fox2019]
-- `cowplot`
+- `cowplot` for figure composition [version 1.1.1, @Wilke2020]
 - `DESeq2` for differential expression analysis and
   variance stabilizing transformation [version 1.36.0, @Love2014]
 - `emmeans` for least-Squares Means (LSM) estimations [version 1.7.3, @Lenth2022]
