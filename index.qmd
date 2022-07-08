@@ -37,8 +37,8 @@ and complemented by Bioconductor packages (release 3.15):
 - `multcompView`
 - `MultiAssayExperiment` for management of multi-omics experiment objects
   [version 1.22.0, @Ramos2017]
-- `tidyr` for data wrangling [version 1.2.0, @Wickham2022].
-
+- `tidyr` for data wrangling [version 1.2.0, @Wickham2022]
+- `WGCNA` for gene clustering [version 1.71, @Langfelder2008, @Langfelder2012].
 
 To install:
 

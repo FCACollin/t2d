@@ -70,7 +70,7 @@ https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGOD
   variance stabilizing transformation [version 1.36.0, @Love2014]
 - `cowplot` for figure composition [version 1.1.1, @Wilke2020]
 - `ggplot2` for graphics [version 3.3.6, @Wickham2016]
-
+- `WGCNA` for gene clustering [version 1.71, @Langfelder2008, @Langfelder2012].
 
 
 ```{r, cfg_prog}
@@ -132,7 +132,10 @@ ads <- adlb |>
   tidyr::pivot_wider(names_from = "paramcd", values_from = "aval") |>
   merge(adsl, y = _, by = "subjid") |>
   (\(df) S4Vectors::DataFrame(df, row.names = subjvis_to_spl(df)))() |>
-  subset(select = c(subjid, diabcd, diab, avisitn, avisit, GLU120)) |>
+  # subset(select = c(
+  #   subjid, diabcd, diab, avisitn, avisit,
+  #   GLU120
+  #   )) |>
   (\(df) {
     assertthat::assert_that(all(table(subjvis_to_spl(df)) == 1))
     df
@@ -233,9 +236,6 @@ dta_expr <- t(dta[[ngs_assay]])
 assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
 
 dta_traits <- colData(dta)
-dta_traits$x <- rownames(dta_traits)
-dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
-dta_traits <- as.data.frame(dta_traits)
 ```
 
 ### Sample clustering
@@ -256,6 +256,11 @@ theme_custom <- function(...) {
 library(ggdendro)
 library(ggplot2)
 dend <- spl_clust |> as.dendrogram()
+
+dta_traits$x <- rownames(dta_traits)
+dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
+dta_traits <- as.data.frame(dta_traits)
+
 lim <- c(0, nobs(dend))
 ddata <- ggdendro::dendro_data(dend, type = "rectangle")
 
@@ -331,8 +336,9 @@ p <- clean_slate() |>
 #| fig-height: 8.3
 show_slate(p)
 ```
+### Gene Clustering
 
-### Soft threshold determination
+#### Soft threshold determination
 
 ```{r}
 library(WGCNA)
@@ -422,7 +428,7 @@ p <- clean_slate() |>
 show_slate(p)
 ```
 
-### Gene clustering
+#### Network
 
 ```{r}
 cfg <- cfg_prog$rna$wgcna$baseline$allmirna
@@ -482,7 +488,25 @@ graphics::par(mfrow = c(1, 1))
 ```
 
 ```{r}
-
+theme_custom_dend <- function(gg, ...) {
+  gg +
+    scale_x_continuous(expand = c(0, 0.5)) +
+    scale_y_continuous(expand = c(0.02, 0)) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      legend.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      panel.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      plot.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      )
+    ) +
+    theme(...)
+}
 
 #' @describeIn wrap_wgcna improved correlation matrix.
 #' @param mat_y,mat_x the matrix used in rows or columns.
@@ -499,67 +523,45 @@ gg_eigen <- function(mat_y, mat_x, draw = TRUE, newpage = FALSE) {
   )
   dta$cor_pval <- WGCNA::corPvalueStudent(dta$cor, nSamples = nrow(mat_x))
 
-  local_theme <- function(gg) {
-    gg + scale_x_continuous(
-      expand = c(0, 0.5)
-    ) + scale_y_continuous(
-      expand = c(0.02, 0)
-    ) + theme(
-      axis.text.x = element_blank(),
-      axis.text.y = element_blank(),
-      legend.background = element_rect(
-        fill = "transparent", colour = "transparent"
-      ),
-      panel.background = element_rect(
-        fill = "transparent", colour = "transparent"
-      ),
-      plot.background = element_rect(
-        fill = "transparent", colour = "transparent"
-      )
-    )
-  }
-
   dendro_y   <- stats::hclust(d = stats::as.dist(1 - stats::cor(mat_y)))
   dendro_y   <- stats::as.dendrogram(dendro_y);
   y_neworder <- labels(dendro_y)
-  dendro_y   <- ggdendro::ggdendrogram(
-    data = dendro_y, rotate = TRUE
-  ) + theme(
-    plot.margin = unit(c(0,0,0,-0.2), units="lines")
-  )
-  dendro_y <- local_theme(gg = dendro_y)
+  dendro_y   <- ggdendro::ggdendrogram(data = dendro_y, rotate = TRUE) +
+    theme(plot.margin = unit(c(0,0,0,-0.2), units="lines"))
+  dendro_y <- theme_custom_dend(gg = dendro_y)
 
   dendro_x <- stats::as.dist(1 - stats::cor(mat_x))
   dendro_x <- stats::hclust(d = stats::dist(x = dendro_x))
   dendro_x <- stats::as.dendrogram(dendro_x)
   x_neworder <- labels(dendro_x)
-  dendro_x <- ggdendro::ggdendrogram(
-    data = dendro_x, rotate = FALSE
-  ) + theme(
-    plot.margin = unit(c(0,0,-.8,0), units="lines")
-  )
-  dendro_x <- local_theme(gg = dendro_x)
+  dendro_x <- ggdendro::ggdendrogram(data = dendro_x, rotate = FALSE) +
+    theme(plot.margin = unit(c(0,0,-.8,0), units="lines"))
+  dendro_x <- theme_custom_dend(gg = dendro_x)
 
   dta$traits <- factor(dta$traits, levels = x_neworder)
   dta$eig <- factor(dta$eig, levels = y_neworder)
 
   dta$cor_pval_2d <- round(dta$cor_pval, 2)
+
   # Create heatmap plot
   heatmap.plot <- ggplot(
     data = dta,
     mapping = aes_string(x = "traits", y = "eig")
-  ) + geom_tile(
-    data = dta, fill = "transparent", col = "gray"
-  ) + geom_tile(
-    # data = dta[dta$cor_pval < 0.1, ],
+  ) + geom_tile(data = dta, fill = "transparent", col = "gray") +
+    geom_tile(
+    data = dta[dta$cor_pval < 0.1, ],
     mapping = aes_string(fill = "cor")
   ) + geom_text(
-    # data = dta[dta$cor_pval < 0.1, ],
+    data = dta[dta$cor_pval < 0.1, ],
     mapping = aes_string(label = "cor_pval_2d"),
     col = "white", size = 2
-  ) + scale_fill_continuous(
+  ) + scale_fill_viridis_c(
+    breaks = seq(-1, 1, .2),
     name = "Corr.",
-    guide = guide_colourbar(barheight = 10)
+    guide = guide_colourbar(barheight = 10),
+    option = "B",
+    direction = -1,
+    lim = c(-1, 1)
   )+ coord_cartesian(
     expand = FALSE
   ) + theme(
@@ -607,12 +609,35 @@ gg_eigen <- function(mat_y, mat_x, draw = TRUE, newpage = FALSE) {
   )
 }
 
+graphics.off()
+
+prep_col <- function(x) UseMethod("prep_col", x)
+prep_col.numeric <- function(x) identity(x)
+prep_col.factor <- function(x) as.numeric(x)
+prep_col.character <- function(x) {
+  x <- as.factor(x)
+  prep_col(x)
+}
+
+names(dta_traits)
 gg_eigen(
   dta_traits |>
-    subset(select = c(GLU120, diabcd)) |>
-    within(diabcd <- as.numeric(diabcd)),
+    subset(select = c(
+      # subjid,
+      diabcd, diab, age, trainn,
+      #avisitn, avisit,
+      CHOL, GLU0, GLU120, GLU30, GLU60, HBA1C, HDL,
+      HOMAB, HOMAIR, INSULIN0, INSULIN120, INSULIN30, INSULIN60, LDL,
+      MATSUDA, TRIG, BMI, BODYFATP, DCAL, DCARBT, DFATT,
+      DPROT, FATACFR, FATMASS, LEANMASS, SMMASS, VAT, VO2MAXE,
+      VO2MAXLBM, VO2MAXML, WEIGHT
+    )) |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
   meig
 )
+
 ```
 
 
