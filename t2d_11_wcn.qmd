@@ -7,7 +7,7 @@ always_allow_html: true
 ---
 
 
-## mRNA Seq - WGCNA
+## mRNA Seq / miRNA - WGCNA
 
 > "_The Weighted Correlation Network Analysis (WGCNA) [11,12] corresponds to a
 > data reduction method and unsupervised classification method. It simplifies
@@ -102,6 +102,10 @@ filter_for_visit <- function(mae, visit) {
   mae[, colData(mae)$avisit == visit, ]
 }
 
+filter_for_coldata <- function(mae, col, is) {
+  mae[, colData(mae)[[col]] %in% is, ]
+}
+
 filter_for_low_expr <- function(mae, assay, cpm_threshold,
                                 frac_cols = cfg_prog$rna$cpm_threshold$fraccol
 ) {
@@ -132,10 +136,6 @@ ads <- adlb |>
   tidyr::pivot_wider(names_from = "paramcd", values_from = "aval") |>
   merge(adsl, y = _, by = "subjid") |>
   (\(df) S4Vectors::DataFrame(df, row.names = subjvis_to_spl(df)))() |>
-  # subset(select = c(
-  #   subjid, diabcd, diab, avisitn, avisit,
-  #   GLU120
-  #   )) |>
   (\(df) {
     assertthat::assert_that(all(table(subjvis_to_spl(df)) == 1))
     df
@@ -204,17 +204,25 @@ besd_mae <- MultiAssayExperiment(
 
 besd_mae
 ```
+### miRNA / Baseline
 
-```{r, filter, eval=TRUE}
+```{r, mirna_settings, eval=TRUE}
 #' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
 #' # WGCNA: gene in rows, sample in cols
 
 ctrl <- cfg_prog$rna
 ngs_assay <- "allmirna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$allmirna
+
+```
+
+
+```{r, filter, eval=TRUE}
 dta <- besd_mae |>
   (\(mae) mae[ , , ngs_assay])() |>
   filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
-  filter_for_visit("Baseline") |>
+  filter_for_coldata("avisit", is = "Baseline") |>
+  filter_for_coldata("diabcd", is = c("NGT", "T2D")) |>
   filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
   (\(mae) {
     mae[[ngs_assay]] <-
@@ -235,10 +243,10 @@ dta <- besd_mae |>
 dta_expr <- t(dta[[ngs_assay]])
 assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
 
-dta_traits <- colData(dta)
+dta_traits <- colData(dta) |> droplevels()
 ```
 
-### Sample clustering
+#### Sample clustering
 
 ```{r, sample_clustering, eval=TRUE}
 spl_clust <- hclust(dist(dta_expr), method = "complete")
@@ -275,7 +283,6 @@ p1 <- ggplot(ggdendro::segment(ddata)) +
     position = "top"
   ) +
   theme_custom(axis.text.y = element_text())
-
 
 p2 <- ggplot(
   dta_traits,
@@ -314,6 +321,11 @@ p <- egg::ggarrange(
   padding = unit(0, "lines"),
   draw = FALSE
 )
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
 p <- clean_slate() |>
   add_title(c(
     "Figure xxx",
@@ -329,21 +341,18 @@ p <- clean_slate() |>
     clustering."
   ))
   
-```
-
-```{r, eval=cfg_prog$knitr$results!="hide"}
-#| fig-width: 11.7
-#| fig-height: 8.3
 show_slate(p)
 ```
-### Gene Clustering
 
-#### Soft threshold determination
+#### Gene Clustering
 
-```{r}
+##### Soft threshold determination
+
+```{r, sft_determination}
 library(WGCNA)
 enableWGCNAThreads()
 
+pwr <- ctrl_wgcna$adjacency$power
 sft <- pickSoftThreshold(
   dta_expr,
   powerVector = c(c(1:10), seq(from = 12, to=20, by=2)),
@@ -351,33 +360,26 @@ sft <- pickSoftThreshold(
 )
 
 library(ggplot2)
-pwr <- cfg_prog$rna$wgcna$baseline$allmirna$adjacency$power
 p1 <- ggplot(
   sft$fitIndices,
-  aes(
-    Power,
-    - sign(slope) * SFT.R.sq,
-    label = Power,
-    shape = Power == pwr
-  )
+  aes(Power, - sign(slope) * SFT.R.sq, label = Power)
 ) +
   geom_hline(yintercept = .9, lty = 2) +
   geom_hline(yintercept = c(0, 1), lty = 1) +
   geom_line() +
-  geom_point(shape = 3) +
   geom_label(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     vjust = 0, nudge_y = .025
   ) +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = Power, yend = 0)
   ) +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = -Inf, yend = - sign(slope) * SFT.R.sq)
   ) +
-  geom_point(show.legend = FALSE, fill = "white") +
+  geom_point(aes(shape = Power == pwr), show.legend = FALSE, fill = "white") +
   scale_shape_manual(values = c("TRUE" = 21, "FALSE" = 3)) +
   coord_cartesian(ylim = c(0, 1)) +
   xlab("Soft Threshold (power)") +
@@ -392,15 +394,15 @@ p2 <- ggplot(
   geom_hline(yintercept = .9) +
   geom_line() +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = Power, yend = 0)
   ) +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = -Inf, yend = mean.k.)
   ) +
   geom_label(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     vjust = 0, hjust = 0, nudge_y = 1
   ) +
   geom_point(fill = "white", show.legend = FALSE) +
@@ -412,35 +414,32 @@ p2 <- ggplot(
   theme(panel.grid.minor = element_blank())
 
 p <- egg::ggarrange(p1, p2, nrow = 1, draw = FALSE)
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    "Soft threshold determination"
-  )) |>
-  add_figure(p, width = inches(6), height = inches(3))
-
 ```
 
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    "Soft threshold determination"
+  )) |>
+  add_figure(p, width = inches(6), height = inches(3))
 show_slate(p)
 ```
 
-#### Network
+##### Network
 
-```{r}
-cfg <- cfg_prog$rna$wgcna$baseline$allmirna
-
+```{r, network}
 # gene dissimilarity
 tom_dis <- dta_expr |>
   adjacency(
-    type = cfg$adjacency$type,
-    power = cfg$adjacency$power,
-    corFnc = cfg$adjacency$cor_fn$value
+    type = ctrl_wgcna$adjacency$type,
+    power = ctrl_wgcna$adjacency$power,
+    corFnc = ctrl_wgcna$adjacency$cor_fn$value
   ) |>
-  TOMsimilarity(TOMType = cfg$tom$type) |>
+  TOMsimilarity(TOMType = ctrl_wgcna$tom$type) |>
   (\(tom) 1 - tom)()
 
 gene_hc <- tom_dis |>
@@ -450,11 +449,11 @@ gene_hc <- tom_dis |>
 # gene clustering
 dyn_mod <- cutreeDynamic(
   gene_hc,
-    cutHeight = cfg$cuttree$cut_height,
-    minClusterSize = cfg$cuttree$min_cluster_size,
+    cutHeight = ctrl_wgcna$cuttree$cut_height,
+    minClusterSize = ctrl_wgcna$cuttree$min_cluster_size,
     method = "hybrid",
     distM = tom_dis,
-    deepSplit = cfg$cuttree$deep_split,
+    deepSplit = ctrl_wgcna$cuttree$deep_split,
     pamRespectsDendro = FALSE
   )
 dyn_col <- labels2colors(dyn_mod)
@@ -467,7 +466,7 @@ meig_dis <- 1 - cor(meig)
 meig_hc <- meig_dis |> as.dist() |> hclust(method = "average")
 ```
 
-```{r, eval=cfg_prog$knitr$results!="hide"}
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
 WGCNA::plotDendroAndColors(
   dendro = gene_hc,
   colors = dyn_mge$color,
@@ -487,7 +486,7 @@ WGCNA::plotDendroAndColors(
 graphics::par(mfrow = c(1, 1))
 ```
 
-```{r}
+```{r, eig_traits_heatmap}
 theme_custom_dend <- function(gg, ...) {
   gg +
     scale_x_continuous(expand = c(0, 0.5)) +
@@ -515,7 +514,7 @@ theme_custom_dend <- function(gg, ...) {
 #' @import ggplot2
 #' @export
 #'
-gg_eigen <- function(mat_y, mat_x, draw = TRUE, newpage = FALSE) {
+gg_eigen <- function(mat_y, mat_x, draw = FALSE, newpage = FALSE) {
 
   dta <- stats::cor(mat_y, mat_x, use = "pairwise.complete.obs")
   dta <- reshape2::melt(
@@ -541,7 +540,7 @@ gg_eigen <- function(mat_y, mat_x, draw = TRUE, newpage = FALSE) {
   dta$traits <- factor(dta$traits, levels = x_neworder)
   dta$eig <- factor(dta$eig, levels = y_neworder)
 
-  dta$cor_pval_2d <- round(dta$cor_pval, 2)
+  dta$cor_pval_2d <- format(round(dta$cor_pval, 2), nsmall = 2)
 
   # Create heatmap plot
   heatmap.plot <- ggplot(
@@ -549,38 +548,40 @@ gg_eigen <- function(mat_y, mat_x, draw = TRUE, newpage = FALSE) {
     mapping = aes_string(x = "traits", y = "eig")
   ) + geom_tile(data = dta, fill = "transparent", col = "gray") +
     geom_tile(
-    data = dta[dta$cor_pval < 0.1, ],
-    mapping = aes_string(fill = "cor")
-  ) + geom_text(
-    data = dta[dta$cor_pval < 0.1, ],
-    mapping = aes_string(label = "cor_pval_2d"),
-    col = "white", size = 2
-  ) + scale_fill_viridis_c(
-    breaks = seq(-1, 1, .2),
-    name = "Corr.",
-    guide = guide_colourbar(barheight = 10),
-    option = "B",
-    direction = -1,
-    lim = c(-1, 1)
-  )+ coord_cartesian(
-    expand = FALSE
-  ) + theme(
-    axis.title.x = element_blank(),
-    axis.title.y = element_blank(),
-    panel.grid.major = element_blank(),
-    legend.position = "left",
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    legend.background = element_rect(
-      fill = "transparent", colour = "transparent"
-    ),
-    panel.background = element_rect(
-      fill = "transparent", colour = "transparent"
-    ),
-    plot.background = element_rect(
-      fill = "transparent", colour = "transparent"
-    ),
-    legend.key.width = grid::unit(.3, "cm"),
-  )
+      data = dta[dta$cor_pval < 0.1, ],
+      mapping = aes_string(fill = "cor")
+    ) + geom_text(
+      data = dta[dta$cor_pval < 0.1, ],
+      mapping = aes_string(label = "cor_pval_2d"),
+      col = "white", size = 2
+    ) + scale_fill_viridis_c(
+      breaks = seq(-1, 1, .2),
+      name = "Corr.",
+      guide = guide_colourbar(barheight = 10),
+      option = "B",
+      direction = -1,
+      lim = c(-1, 1),
+      begin = .1,
+      end = .9
+    )+ coord_cartesian(
+      expand = FALSE
+    ) + theme(
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid.major = element_blank(),
+      legend.position = "left",
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      panel.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      plot.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      legend.key.width = grid::unit(.3, "cm"),
+    )
 
   a1 <- ggplotGrob(heatmap.plot)
   a2 <- ggplotGrob(dendro_y)
@@ -609,8 +610,6 @@ gg_eigen <- function(mat_y, mat_x, draw = TRUE, newpage = FALSE) {
   )
 }
 
-graphics.off()
-
 prep_col <- function(x) UseMethod("prep_col", x)
 prep_col.numeric <- function(x) identity(x)
 prep_col.factor <- function(x) as.numeric(x)
@@ -619,13 +618,10 @@ prep_col.character <- function(x) {
   prep_col(x)
 }
 
-names(dta_traits)
-gg_eigen(
+res <- gg_eigen(
   dta_traits |>
     subset(select = c(
-      # subjid,
       diabcd, diab, age, trainn,
-      #avisitn, avisit,
       CHOL, GLU0, GLU120, GLU30, GLU60, HBA1C, HDL,
       HOMAB, HOMAIR, INSULIN0, INSULIN120, INSULIN30, INSULIN60, LDL,
       MATSUDA, TRIG, BMI, BODYFATP, DCAL, DCARBT, DFATT,
@@ -639,9 +635,99 @@ gg_eigen(
 )
 
 ```
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+
+p <- clean_slate() |>
+  add_figure(res$gg)
+
+show_slate(p)
+```
+
+### mRNA / Baseline
+
+```{r, mrna_settings, eval=TRUE}
+#' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
+#' # WGCNA: gene in rows, sample in cols
+
+ctrl <- cfg_prog$rna
+ngs_assay <- "mrna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$mrna
+```
+
+```{r, filter}
+```
 
 
-#### Legacy
+#### Sample clustering
+
+```{r, sample_clustering, eval=TRUE}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    wrap_long_lines(
+      "Clustering dendrogram of samples based on their Euclidean distance
+      and trait heatmap"
+    )
+  )) |>
+  add_figure(p, height = inches(5)) |>
+  add_note(c(
+    "Note: VST transformed expression matrix used to estimate distances
+    between samples, _complete_ method was used for the hierarchical
+    clustering."
+  ))
+  
+show_slate(p)
+```
+
+#### Gene Clustering
+
+##### Soft threshold determination
+
+```{r, sft_determination}
+```
+
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    "Soft threshold determination"
+  )) |>
+  add_figure(p, width = inches(6), height = inches(3))
+show_slate(p)
+```
+
+##### Network
+
+```{r, network}
+```
+
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+```
+
+```{r, eig_traits_heatmap}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+
+p <- clean_slate() |>
+  add_figure(res$gg)
+
+show_slate(p)
+```
+
+### Legacy
 
 ```{r, eval=FALSE, include=FALSE}
 control_wgcna <- function(
