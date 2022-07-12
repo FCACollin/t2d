@@ -727,6 +727,66 @@ p <- clean_slate() |>
 show_slate(p)
 ```
 
+### miRNA / CHG
+
+```{r}
+filter_for_paired_visits <- function(mae) {
+  assert_that(all(table(colData(mae)$subjid) <= 2))
+
+  subj <- table(colData(mae)$subjid)
+  subj <- names(subj[subj == 2])
+  mae <- mae[, colData(mae)$subjid %in% subj, ]
+
+  chk_df <- as.data.frame(colData(mae))
+  check <- split(chk_df, f = chk_df$avisit)
+
+  # Verify the selection:
+  assert_that(all(
+    sapply(check, subj = subj,\(x, subj) all(subj %in% x$subjid))
+  ))
+  mae
+}
+
+gc()
+dta <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_paired_visits() |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) {
+    # VST transformation
+    colData(mae) <- droplevels(colData(mae))
+    colData(mae)$avisit_ <- factor(
+      colData(mae)$avisit,
+      levels = levels(colData(mae)$avisit),
+      labels = sub(" ", "_", levels(colData(mae)$avisit))
+    )
+    coldata <- colData(mae)[c("diabcd", "subjid", "avisit_")]
+
+    mae[[ngs_assay]] <- DESeq2::DESeqDataSetFromMatrix(
+      countData = mae[[ngs_assay]],
+      colData = colData(x = mae),
+      design = stats::formula(~ subjid + avisit_)
+    ) |>
+      DESeq2::varianceStabilizingTransformation(blind = FALSE) |>
+      SummarizedExperiment::assay()
+
+    mae
+  })() |>
+  filter_for_coldata("diabcd", is = c("NGT", "T2D")) |>
+  (\(mae) {
+    # Calculate the diff M3 - BL
+  })()
+
+#' WGCNA Expression data.
+#'
+#' A matrix or data frame in which columns are genes and rows ar samples.
+#'
+dta_expr <- t(dta[[ngs_assay]])
+assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
+dta_traits <- colData(dta) |> droplevels()
+```
+
 ### Legacy
 
 ```{r, eval=FALSE, include=FALSE}
