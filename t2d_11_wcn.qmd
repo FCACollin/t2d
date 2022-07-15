@@ -196,6 +196,7 @@ map_arrays <- function(x) {
   y
 }
 
+colnames(ads) <- tolower(colnames(ads))
 besd_mae <- MultiAssayExperiment(
   experiments = ExperimentList(rna),
   colData = ads,
@@ -304,7 +305,7 @@ p4 <- ggplot(
   aes(
     xmin = 0, xmax = 1,
     ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
-    fill = GLU120
+    fill = glu120
   )
 ) +
   geom_rect(col = "white") +
@@ -622,11 +623,11 @@ res <- gg_eigen(
   dta_traits |>
     subset(select = c(
       diabcd, diab, age, trainn,
-      CHOL, GLU0, GLU120, GLU30, GLU60, HBA1C, HDL,
-      HOMAB, HOMAIR, INSULIN0, INSULIN120, INSULIN30, INSULIN60, LDL,
-      MATSUDA, TRIG, BMI, BODYFATP, DCAL, DCARBT, DFATT,
-      DPROT, FATACFR, FATMASS, LEANMASS, SMMASS, VAT, VO2MAXE,
-      VO2MAXLBM, VO2MAXML, WEIGHT
+      chol, glu0, glu120, glu30, glu60, hba1c, hdl,
+      homab, homair, insulin0, insulin120, insulin30, insulin60, ldl,
+      matsuda, trig, bmi, bodyfatp, dcal, dcarbt, dfatt,
+      dprot, fatacfr, fatmass, leanmass, smmass, vat, vo2maxe,
+      vo2maxlbm, vo2maxml, weight
     )) |>
     lapply(prep_col)|>
     DataFrame(row.names = rownames(dta_traits)) |>
@@ -729,6 +730,15 @@ show_slate(p)
 
 ### miRNA / CHG
 
+```{r, mirna_chg_settings, eval=TRUE}
+#' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
+#' # WGCNA: gene in rows, sample in cols
+
+ctrl <- cfg_prog$rna
+ngs_assay <- "allmirna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$chg$allmirna # TODO
+```
+
 ```{r}
 filter_for_paired_visits <- function(mae) {
   assert_that(all(table(colData(mae)$subjid) <= 2))
@@ -775,17 +785,133 @@ dta <- besd_mae |>
   })() |>
   filter_for_coldata("diabcd", is = c("NGT", "T2D")) |>
   (\(mae) {
-    # Calculate the diff M3 - BL
+    # Get traits: BL, M3, CHG:
+    bl <- mae[, colData(mae)$avisit == "Baseline", ]
+    m3 <- mae[, colData(mae)$avisit == "Month 3", ]
+    assert_that(all(colData(bl)$subjid == colData(m3)$subjid))
+    mat <- m3[[ngs_assay]] - bl[[ngs_assay]]
+    nm <- setNames(colData(mae)$subjid, nm = rownames(colData(mae)))
+    colnames(mat) <- nm[colnames(mat)]
+
+    get_vars_when <- function(mae,
+                              fun = is.numeric,
+                              col_names = TRUE) {
+      df <- colData(mae)
+      assert_that(all(table(df$subjid) <= 1))
+      rownames(df) <- df$subjid
+      df <- df[, sapply(df, fun)]
+      if (col_names)
+        colnames(df) <- paste0(tolower(colnames(df)), "_", substitute(mae))
+      df
+    }
+    m3_cd <- get_vars_when(m3, is.numeric) # m3_col data
+    bl_cd <- get_vars_when(bl, is.numeric)
+    # bl qualitative (diabcd and other)
+    bl_ql <- get_vars_when(bl, Negate(is.numeric), col_names = FALSE)
+    traits <- Map(a = m3_cd, b = bl_cd, f = \(a, b) a - b) |>
+      S4Vectors::DataFrame() |>
+      (\(df, ...) {
+        args <- list(...)
+        colnames(df) <- gsub("_m3", "_chg", colnames(df))
+        df <- do.call(cbind, c(args, list(df)))
+        # Constant columns are not interesting for gene variation association
+        df[sapply(df, sd) > 0]
+      })(bl_cd, m3_cd) |>
+      cbind(bl_ql)
+
+    MultiAssayExperiment(
+      experiments = ExperimentList(vst = mat),
+      colData = traits
+    )
   })()
 
 #' WGCNA Expression data.
 #'
 #' A matrix or data frame in which columns are genes and rows ar samples.
 #'
-dta_expr <- t(dta[[ngs_assay]])
+dta_expr <- t(dta[["vst"]])
 assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
 dta_traits <- colData(dta) |> droplevels()
+
 ```
+
+#### Sample Clustering
+
+```{r, sample_clustering_chg, eval=TRUE}
+spl_clust <- hclust(dist(dta_expr), method = "complete")
+
+# Clustering Dendrogram of samples based on their Euclidean distance
+theme_custom <- function(...) {
+    theme_dendro() +
+    theme(
+      plot.margin = unit(c(0, 0, 0, 0), "null"),
+      panel.spacing = unit(c(0, 0, 0, 0), "null")
+    ) +
+    theme(...)
+}
+
+library(ggdendro)
+library(ggplot2)
+dend <- spl_clust |> as.dendrogram()
+
+dta_traits$x <- rownames(dta_traits)
+dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
+dta_traits <- as.data.frame(dta_traits)
+
+lim <- c(0, nobs(dend))
+ddata <- ggdendro::dendro_data(dend, type = "rectangle")
+
+p1 <- ggplot(ggdendro::segment(ddata)) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  coord_flip(clip = "off") +
+  scale_y_reverse(expand = expansion(0)) +
+  scale_x_continuous(
+    breaks = seq_len(nobs(dend)),
+    labels = ggdendro::label(ddata)$label,
+    lim = lim,
+    position = "top"
+  ) +
+  theme_custom(axis.text.y = element_text())
+
+p2 <- ggplot(
+  dta_traits,
+  aes(
+    xmin = 0, xmax = 1,
+    ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
+    fill = diabcd
+  )
+) +
+  geom_rect(col = "white") +
+  scale_y_continuous(breaks = 1:34) +
+  scale_x_continuous(expand = expansion(0)) +
+  scale_fill_viridis_d(option = "C", direction = -1, begin = .2, end = .8) +
+  coord_cartesian(ylim = lim) +
+  theme_custom(legend.position = "top")
+
+p4 <- ggplot(
+  dta_traits,
+  aes(
+    xmin = 0, xmax = 1,
+    ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
+    fill = glu120_chg
+  )
+) +
+  geom_rect(col = "white") +
+  scale_y_continuous(breaks = 1:34) +
+  scale_x_continuous(expand = expansion(0)) +
+  scale_fill_viridis_c() +
+  coord_cartesian(ylim = lim) +
+  theme_custom(legend.position = "top")
+
+p <- egg::ggarrange(
+  p1, p2, p4,
+  nrow = 1,
+  widths = c(2, 1, 1),
+  padding = unit(0, "lines"),
+  draw = FALSE
+)
+```
+
 
 ### Legacy
 
