@@ -1041,6 +1041,89 @@ show_slate(p)
 ```
 
 
+## `dds_5` - DE: Exercise intervention, all micro RNA
+
+```{r}
+ctrl <- cfg_prog$rna
+ngs_assay <- "allmirna"
+
+filter_for_paired_visits <- function(mae) {
+  assert_that(all(table(colData(mae)$subjid) <= 2))
+
+  subj <- table(colData(mae)$subjid)
+  subj <- names(subj[subj == 2])
+  mae <- mae[, colData(mae)$subjid %in% subj, ]
+
+  chk_df <- as.data.frame(colData(mae))
+  check <- split(chk_df, f = chk_df$avisit)
+
+  # Verify the selection:
+  assert_that(all(
+    sapply(check, subj = subj,\(x, subj) all(subj %in% x$subjid))
+  ))
+  mae
+}
+
+dds_5_fit <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_paired_visits() |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) {
+    # <https://support.bioconductor.org/p/84241/#84296>
+    # Or:
+    # vignette('DESeq2'),
+    # > Section: "Group-specific condition effects, individuals nested
+    # > within groups"
+    colData(mae) <- droplevels(colData(mae))
+    colData(mae)$subjid <- as.character(colData(mae)$subjid)
+    colData(mae)$avisit_ <- factor(
+      colData(mae)$avisit,
+      levels = levels(colData(mae)$avisit),
+      labels = sub(" ", "_", levels(colData(mae)$avisit))
+    )
+    coldata <- colData(mae)[c("diabcd", "subjid", "avisit_")]
+
+    coldata <- do.call(
+      rbind,
+      by(
+        data = coldata,
+        INDICES = list(coldata$diabcd),
+        FUN = function(x) {
+          subjid <- as.factor(x$subjid)# nolint
+          x$P.n <- factor(# nolint
+            subjid,
+            levels = levels(subjid),
+            labels = paste0("P.", 1:nlevels(subjid))
+          )
+          x[order(x$subjid, x$diabcd), ]
+        }
+      )
+    )
+
+    coldata <- coldata[rownames(colData(mae)), ]
+    dsgn <- stats::model.matrix(
+      ~diabcd + diabcd:P.n + diabcd:avisit_,
+      coldata
+    )
+    dsgn <- dsgn[, colSums(dsgn) != 0]
+
+    DESeq2::DESeqDataSetFromMatrix(
+      countData = mae[[ngs_assay]],
+      colData = colData(x = mae),
+      design = dsgn
+    )
+  })() |>
+  DESeq2::DESeq(
+    parallel = TRUE,
+    BPPARAM = BiocParallel::bpparam(),
+    fitType = "local",
+    betaPrior = FALSE
+  )
+
+```
+
+
 ## Session Informations
 
 ```{r}
