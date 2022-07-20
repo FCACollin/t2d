@@ -12,7 +12,11 @@
 format_mirna <- function(x) {
   rownames(x) <- x[, 1]
   x <- x[-1]
-  names(x) <- gsub(pattern = "^(X.*v.).*$", x = names(x), replacement = "\\1")
+  names(x) <- gsub(
+    pattern = "^(X.*v.).*$",
+    x = names(x),
+    replacement = "\\1"
+  )
   x
 }
 
