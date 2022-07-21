@@ -527,6 +527,50 @@ dds_2_est <- dds_2_fit |>
   Reduce(rbind, x = _)
 ```
 
+```{r}
+head(dds_2_est)
+
+
+ndegenes <- dds_2_est |>
+  subset(round(padj, 5) < 0.001) |>
+  with(unique(feature)) |>
+  length()
+
+
+sprintf("%.2f", round(ndegenes / ngenes * 100, 2))
+
+split(dds_2_est, dds_2_est$ctrs) |>
+  lapply(\(x) {
+    dim(x)
+    head(x)
+    table(cut(x$padj, breaks = c(0, 0.001, 0.05, 1)))
+  })
+
+
+
+pct_de_genes <- sprintf("%.2f", round(ndegenes / ngenes * 100, 2))
+
+
+genes_nsub <- nrow(besd_mae[[ngs_assay]])
+genes_de_n <- c(
+  Overall = dds_2_est |>
+      subset(round(padj, 5) < 0.001) |>
+      with(unique(feature)) |>
+      length()
+  ,
+  split(dds_2_est, dds_2_est$ctrs) |>
+    sapply(\(x) {
+      x <- subset(x, round(padj, 5) < 0.001)
+      length(unique(x$feature))
+    })
+)
+
+genes_nsub
+genes_de_n
+genes_de_pct <- sprintf("%.2f", genes_de_n / genes_nsub * 100)
+
+```
+
 ### Fig 07 03
 
 ```{r, dds_2_gg}
@@ -1149,9 +1193,6 @@ dds_5_fit <- besd_mae |>
     betaPrior = FALSE
   )
 
-```
-
-```{r, dds_5_est}
 de_by_name <- function(df,
                        name,
                        adj_meth = ctrl$adj_meth) {
@@ -1250,6 +1291,94 @@ export_as(
 ```
 
 ```{r, f07_09_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+
+### Fig 07 10
+
+```{r, f07_10}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_5_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_5_est$label <- gsub(
+  "hsa-(mir|miR|let)-",
+  dds_5_est$feature,
+  replacement = ""
+)
+dds_5_est$type <- substr(dds_5_est$feature, start = 5, stop = 7)
+head(dds_5_est)
+
+dds_5_txt <- subset(dds_5_est, padj < 0.05 & abs(log2FoldChange) > .5)
+
+dds_5_gg <- ggplot(
+  dds_5_est,
+  mapping = aes(x = log2FoldChange, y = log_padj, col = type)
+) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex(mapping = aes(fill = log10(..count..)), color = "transparent") +
+  geom_point(data = dds_5_txt, size = 1, shape = 3) +
+  geom_text(
+    data = dds_5_txt,
+    aes(label = label),
+    vjust = -0.5,
+    size = 2,
+    show.legend = FALSE
+  ) +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_color_manual(values = c("#FF5003", "#003F7D")) +
+  scale_y_continuous(breaks = brk) +
+  facet_wrap(. ~ ctrs, ncol = 3) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(2, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.10",
+      strwrap(
+        "Volcano plot - Size and Significance of Differential
+        Expression among micro RNA in response to the exercise
+        intervention (CHG)", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_5_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_10.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_10_af.pdf")
+)
+```
+
+```{r, f07_10_sh, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 8.3
 #| fig-height: 11.7
 show_slate(p)
