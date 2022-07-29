@@ -108,6 +108,56 @@ de_by_ctrs <- function(df,
     }
   )
 }
+
+export_xl <- function(..., info, dir, basenm) {
+  
+  df_ls <- list(...)
+  wb <- openxlsx::createWorkbook()
+  
+  ws_nm_info <- "info"
+  openxlsx::addWorksheet(wb, ws_nm_info)
+  info_df <- c(
+    info,
+    Sys.info(),
+    Sys.time()
+  )
+  info_df <- as.data.frame(info_df)
+  openxlsx::writeData(
+    wb = wb,
+    sheet = ws_nm_info,
+    x = info_df,
+    rowNames = TRUE,
+    colNames = FALSE
+  )
+  
+  for (i in seq_along((df_ls))) {
+    df <- df_ls[[i]]
+    ws_nm_info <- names(df_ls)[i]
+    lbl_df <- lapply(df, attr, "label")
+    lbl_df <- lapply(lbl_df, \(x) if (is.null(x)) "" else x)
+    lbl_df <- as.data.frame(lbl_df, row.names = "label:")
+    openxlsx::addWorksheet(wb, ws_nm_info)
+    openxlsx::writeData(
+      wb = wb,
+      sheet = ws_nm_info,
+      x = lbl_df,
+      rowNames = TRUE,
+      colNames = FALSE
+    )
+    openxlsx::writeData(
+      wb, ws_nm_info,
+      x = df,
+      rowNames = TRUE,
+      startRow = 2
+    )
+  }
+  
+  openxlsx::saveWorkbook(
+    wb,
+    file = file.path(dir, paste0(basenm, ".xlsx")),
+    overwrite = TRUE
+  )
+}
 ```
 
 #### Data preparation
@@ -137,7 +187,6 @@ ads <- adlb |>
 rm(adsl, advs, adlb)
 ads
 ```
-
 
 ```{r, rna}
 rna <- list(
@@ -219,8 +268,7 @@ below that threshold.
 assay <- "allmirna"
 ```
 
-::: {.panel-tabset}
-
+::: panel-tabset
 #### Static figure
 
 ```{r, depth_diversity_gg, eval=cfg_prog$knitr$results!="hide"}
@@ -256,18 +304,15 @@ gg
 ```{r, depth_diversity_plotly, eval=cfg_prog$knitr$results!="hide"}
 plotly::ggplotly(gg)
 ```
-
 :::
 
 ```{r}
 rm(vline, dtaplot, assay, gg)
 ```
 
-
 ### mRNA
 
-::: {.panel-tabset}
-
+::: panel-tabset
 #### Static figure
 
 ```{r, depth_diversity_mrna}
@@ -281,7 +326,6 @@ assay <- "mrna"
 
 ```{r, depth_diversity_plotly, eval=cfg_prog$knitr$results!="hide"}
 ```
-
 :::
 
 :::
@@ -315,7 +359,6 @@ dds_1_fit <- besd_mae |>
     fitType = "local"
   )
 ```
-
 
 ```{r, dds_1_est}
 dds_1_est <- dds_1_fit |>
@@ -397,6 +440,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_01_xlsx}
+export_xl(
+  fig_07_01 = dds_1_est,
+  info = c(
+    title =
+      "miRNA at baseline - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_01"
+)
+```
 
 ### Fig 07 02
 
@@ -617,7 +672,7 @@ p <- clean_slate() |>
       "Figure 7.3",
       strwrap(
         "Volcano plot - Response Size and Significance of Differential
-        Expression among all miRNA at Baseline", width = 80
+        Expression among mRNA at Baseline", width = 80
       ),
       "Analysis Set: Full Analysis Set"
     )
@@ -646,6 +701,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_03_xlsx}
+export_xl(
+  fig_07_03 = dds_2_est,
+  info = c(
+    title =
+      "mRNA at baseline - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_03"
+)
+```
 
 ### Fig 07 04
 
@@ -730,7 +797,6 @@ export_as(
 show_slate(p)
 ```
 
-
 ## `dds_3` - DE: Month 3, all micro RNA
 
 ```{r, dds_3_dta}
@@ -759,7 +825,6 @@ dds_3_fit <- besd_mae |>
     fitType = "local"
   )
 ```
-
 
 ```{r, dds_3_est}
 dds_3_est <-
@@ -838,6 +903,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_05_xlsx}
+export_xl(
+  fig_07_05 = dds_3_est,
+  info = c(
+    title =
+      "All miRNA at month 3 - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_05"
+)
+```
 
 ### Fig 07 06
 
@@ -1034,6 +1111,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_07_xlsx}
+export_xl(
+  fig_07_07 = dds_4_est,
+  info = c(
+    title =
+      "mRNA at month 3 - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_07"
+)
+```
 
 ### Fig 07 08
 
@@ -1117,7 +1206,6 @@ export_as(
 #| fig-height: 11.7
 show_slate(p)
 ```
-
 
 ## `dds_5` - DE: Exercise intervention, all micro RNA
 
@@ -1235,7 +1323,6 @@ dds_5_est <-
   )
 ```
 
-
 ### Fig 07 09
 
 ```{r, f07_09}
@@ -1302,6 +1389,20 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_09_xlsx}
+export_xl(
+  fig_07_09 = dds_5_est,
+  info = c(
+    title = paste(
+      "All miRNA Change from Baseline - differential expression by diabetes",
+      "group"
+    ),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_09"
+)
+```
 
 ### Fig 07 10
 
@@ -1485,7 +1586,6 @@ dds_6_est <-
   )
 ```
 
-
 ### Fig 07 11
 
 ```{r, f07_11}
@@ -1552,6 +1652,20 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_11_xlsx}
+export_xl(
+  fig_07_11 = dds_6_est,
+  info = c(
+    title = paste(
+      "mRNA Change from Baseline - differential expression by diabetes",
+      "group"
+    ),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_11"
+)
+```
 
 ### Fig 07 12
 
@@ -1645,6 +1759,7 @@ rm(ctrl, ngs_assay, dds_6_fit, pval, log_adj, brk, dds_6_gg, p)
 gc()
 ls()
 ```
+
 ## Session Informations
 
 ```{r}
