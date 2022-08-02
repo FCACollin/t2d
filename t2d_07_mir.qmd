@@ -119,7 +119,7 @@ export_xl <- function(..., info, dir, basenm) {
   info_df <- c(
     info,
     Sys.info(),
-    Sys.time()
+    timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S (%Z)")
   )
   info_df <- as.data.frame(info_df)
   openxlsx::writeData(
@@ -369,7 +369,14 @@ dds_1_est <- dds_1_fit |>
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
+
 ```
 
 ### Fig 07 01
@@ -585,7 +592,13 @@ dds_2_est <- dds_2_fit |>
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
 ```
 
 ```{r, eval=FALSE}
@@ -836,7 +849,13 @@ dds_3_est <-
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
 ```
 
 ### Fig 07 05
@@ -1043,7 +1062,13 @@ dds_4_est <-
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
 ```
 
 ### Fig 07 07
@@ -1320,7 +1345,13 @@ dds_5_est <-
   Reduce(rbind, x = _) |>
   within(
     ctrs <- factor(ctrs, levels = paste("chg", c("NGT", "IGT", "T2D")))
-  )
+  ) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
 ```
 
 ### Fig 07 09
@@ -1583,7 +1614,13 @@ dds_6_est <-
   Reduce(rbind, x = _) |>
   within(
     ctrs <- factor(ctrs, levels = paste("chg", c("NGT", "IGT", "T2D")))
-  )
+  ) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
 ```
 
 ### Fig 07 11
