@@ -55,4 +55,4 @@ always_allow_html: true
 
 editor:
   markdown:
-    canonical: true
+    canonical: false

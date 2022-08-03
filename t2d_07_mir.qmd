@@ -1081,8 +1081,13 @@ brk <- setNames(
   c(log_adj, paste0("padj=", pval))
 )
 
-dds_4_gg <-
-  dds_4_est |>
+dds_4_gg <- dds_4_est |>
+  # All pval close to 1 disturbe the hex-density plots
+  (\(df) {
+    assert_that(all(df$padj[df$ctrs == "IGT vs NGT"] > 0.991))
+    df
+  })() |>
+  subset(ctrs != "IGT vs NGT") |>
   ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
   geom_vline(xintercept = c(-1, 1), lty = 2) +
   xlab("Log2-fold-change") +
@@ -1115,6 +1120,11 @@ p <- clean_slate() |>
     )
   ) |>
   add_figure(dds_4_gg, height = inches(3), width = inches(6)) |>
+  add_note(c(
+    "NOTE: all feature comparisons between IGT and NGT were characterised by
+    adjusted p.values greater than 0.99; to preserve the hexagonal-density
+    plot, this comparison was not represented."
+  )) |>
   add_footer(
     c(
       "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
@@ -1162,7 +1172,14 @@ brk <- setNames(
   c(log_adj, paste0("padj=", pval))
 )
 
-dds_4_gg <- ggplot(dds_4_est, mapping = aes(x = log2FoldChange, y = log_padj)) +
+dds_4_gg <- dds_4_est |>
+  # All pval close to 1 disturbe the hex-density plots
+  (\(df) {
+    assert_that(all(df$padj[df$ctrs == "IGT vs NGT"] > 0.991))
+    df
+  })() |>
+  subset(ctrs != "IGT vs NGT") |>
+  ggplot(mapping = aes(x = log2FoldChange, y = log_padj)) +
   geom_vline(xintercept = c(-1, 1), lty = 2) +
   xlab("Log2-fold-change") +
   ylab(expression(-1 %*% log10(padj))) +
@@ -1210,6 +1227,11 @@ p <- clean_slate() |>
     )
   ) |>
   add_figure(dds_4_gg, height = inches(3), width = inches(6)) |>
+  add_note(c(
+    "NOTE: all feature comparisons between IGT and NGT were characterised by
+    adjusted p.values greater than 0.99; to preserve the hexagonal-density
+    plot, this comparison was not represented."
+  )) |>
   add_footer(
     c(
       "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
@@ -1714,15 +1736,10 @@ brk <- setNames(
   c(log_adj, paste0("padj=", pval))
 )
 
-dds_6_est$label <- gsub(
-  "hsa-(mir|miR|let)-",
-  dds_6_est$feature,
-  replacement = ""
-)
+dds_6_est$label <- gsub("ENSG0+", "", dds_6_est$feature)
 dds_6_est$type <- substr(dds_6_est$feature, start = 5, stop = 7)
-head(dds_6_est)
 
-dds_6_txt <- subset(dds_6_est, padj < 0.05 & abs(log2FoldChange) > .5)
+dds_6_txt <- subset(dds_6_est, padj < 0.05 & abs(log2FoldChange) > 1)
 
 dds_6_gg <- ggplot(
   dds_6_est,
