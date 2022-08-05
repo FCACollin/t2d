@@ -205,6 +205,8 @@ besd_mae <- MultiAssayExperiment(
 
 besd_mae
 ```
+
+
 ### miRNA / Baseline
 
 ```{r, mirna_settings, eval=TRUE}
@@ -215,6 +217,8 @@ ctrl <- cfg_prog$rna
 ngs_assay <- "allmirna"
 ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$allmirna
 
+# Specific to sample_clustering
+col_fill <- "glu120"
 ```
 
 
@@ -246,6 +250,7 @@ assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
 
 dta_traits <- colData(dta) |> droplevels()
 ```
+
 
 #### Sample clustering
 
@@ -305,7 +310,7 @@ p4 <- ggplot(
   aes(
     xmin = 0, xmax = 1,
     ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
-    fill = glu120
+    fill = !!as.name(col_fill)
   )
 ) +
   geom_rect(col = "white") +
@@ -424,7 +429,7 @@ p <- egg::ggarrange(p1, p2, nrow = 1, draw = FALSE)
 p <- clean_slate() |>
   add_title(c(
     "Figure xxx",
-    "Soft threshold determination"
+    "Micro-RNA / Baseline - Soft threshold determination"
   )) |>
   add_figure(p, width = inches(6), height = inches(3))
 show_slate(p)
@@ -472,7 +477,6 @@ WGCNA::plotDendroAndColors(
   dendro = gene_hc,
   colors = dyn_mge$color,
   dendroLabels = FALSE,
-  hang = -1,
   addGuide = TRUE,
   guideHang = 0.05,
   groupLabels = "",
@@ -487,7 +491,7 @@ WGCNA::plotDendroAndColors(
 graphics::par(mfrow = c(1, 1))
 ```
 
-```{r, eig_traits_heatmap}
+```{r, eig_traits_heatmap_functions}
 theme_custom_dend <- function(gg, ...) {
   gg +
     scale_x_continuous(expand = c(0, 0.5)) +
@@ -619,6 +623,9 @@ prep_col.character <- function(x) {
   prep_col(x)
 }
 
+```
+
+```{r}
 res <- gg_eigen(
   dta_traits |>
     subset(select = c(
@@ -636,6 +643,7 @@ res <- gg_eigen(
 )
 
 ```
+
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
@@ -701,7 +709,7 @@ show_slate(p)
 p <- clean_slate() |>
   add_title(c(
     "Figure xxx",
-    "Soft threshold determination"
+    "Messenger-RNA / Baseline - Soft threshold determination"
   )) |>
   add_figure(p, width = inches(6), height = inches(3))
 show_slate(p)
@@ -737,9 +745,12 @@ show_slate(p)
 ctrl <- cfg_prog$rna
 ngs_assay <- "allmirna"
 ctrl_wgcna <- cfg_prog$rna$wgcna$chg$allmirna # TODO
+
+# Specific to sample_clustering
+col_fill <- "glu120_chg"
 ```
 
-```{r}
+```{r, prep_data_chg}
 filter_for_paired_visits <- function(mae) {
   assert_that(all(table(colData(mae)$subjid) <= 2))
 
@@ -837,79 +848,165 @@ dta_traits <- colData(dta) |> droplevels()
 
 #### Sample Clustering
 
-```{r, sample_clustering_chg, eval=TRUE}
-spl_clust <- hclust(dist(dta_expr), method = "complete")
+```{r, sample_clustering}
+```
 
-# Clustering Dendrogram of samples based on their Euclidean distance
-theme_custom <- function(...) {
-    theme_dendro() +
-    theme(
-      plot.margin = unit(c(0, 0, 0, 0), "null"),
-      panel.spacing = unit(c(0, 0, 0, 0), "null")
-    ) +
-    theme(...)
-}
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    wrap_long_lines(
+      "Clustering dendrogram of samples based on their Euclidean distance
+      and trait heatmap"
+    )
+  )) |>
+  add_figure(p, height = inches(5)) |>
+  add_note(c(
+    "Note: VST transformed expression matrix used to estimate distances
+    between samples, _complete_ method was used for the hierarchical
+    clustering."
+  ))
+  
+show_slate(p)
+```
 
-library(ggdendro)
-library(ggplot2)
-dend <- spl_clust |> as.dendrogram()
+#### Gene Clustering
 
-dta_traits$x <- rownames(dta_traits)
-dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
-dta_traits <- as.data.frame(dta_traits)
+##### Soft threshold determination
 
-lim <- c(0, nobs(dend))
-ddata <- ggdendro::dendro_data(dend, type = "rectangle")
+```{r, sft_determination}
+```
 
-p1 <- ggplot(ggdendro::segment(ddata)) +
-  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
-  coord_flip(clip = "off") +
-  scale_y_reverse(expand = expansion(0)) +
-  scale_x_continuous(
-    breaks = seq_len(nobs(dend)),
-    labels = ggdendro::label(ddata)$label,
-    lim = lim,
-    position = "top"
-  ) +
-  theme_custom(axis.text.y = element_text())
 
-p2 <- ggplot(
-  dta_traits,
-  aes(
-    xmin = 0, xmax = 1,
-    ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
-    fill = diabcd
-  )
-) +
-  geom_rect(col = "white") +
-  scale_y_continuous(breaks = 1:34) +
-  scale_x_continuous(expand = expansion(0)) +
-  scale_fill_viridis_d(option = "C", direction = -1, begin = .2, end = .8) +
-  coord_cartesian(ylim = lim) +
-  theme_custom(legend.position = "top")
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    "Micro-RNA / Change from Baseline - Soft threshold determination"
+  )) |>
+  add_figure(p, width = inches(6), height = inches(3))
+show_slate(p)
+```
 
-p4 <- ggplot(
-  dta_traits,
-  aes(
-    xmin = 0, xmax = 1,
-    ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
-    fill = glu120_chg
-  )
-) +
-  geom_rect(col = "white") +
-  scale_y_continuous(breaks = 1:34) +
-  scale_x_continuous(expand = expansion(0)) +
-  scale_fill_viridis_c() +
-  coord_cartesian(ylim = lim) +
-  theme_custom(legend.position = "top")
+##### Network
 
-p <- egg::ggarrange(
-  p1, p2, p4,
-  nrow = 1,
-  widths = c(2, 1, 1),
-  padding = unit(0, "lines"),
-  draw = FALSE
+```{r, network}
+```
+
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+```
+
+```{r, gg_eigen_chg}
+res <- gg_eigen(
+  dta_traits |>
+    (\(df) df[sapply(
+       df,
+       function(x) if (is.numeric(x)) sd(x) > 0 else length(unique(x)) > 1
+     )]) () |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
+  meig
 )
+
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+
+p <- clean_slate() |>
+  add_figure(res$gg)
+
+show_slate(p)
+```
+
+### mRNA / CHG
+
+```{r, mrna_chg_settings, eval=TRUE}
+#' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
+#' # WGCNA: gene in rows, sample in cols
+
+ctrl <- cfg_prog$rna
+ngs_assay <- "mrna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$chg$mrna
+
+# Specific to sample_clustering
+col_fill <- "glu120_chg"
+```
+
+```{r, prep_data_chg}
+```
+
+#### Sample Clustering
+
+```{r, sample_clustering}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    wrap_long_lines(
+      "Clustering dendrogram of samples based on their Euclidean distance
+      and trait heatmap"
+    )
+  )) |>
+  add_figure(p, height = inches(5)) |>
+  add_note(c(
+    "Note: VST transformed expression matrix used to estimate distances
+    between samples, _complete_ method was used for the hierarchical
+    clustering."
+  ))
+  
+show_slate(p)
+```
+
+#### Gene Clustering
+
+##### Soft threshold determination
+
+```{r, sft_determination}
+```
+
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+p <- clean_slate() |>
+  add_title(c(
+    "Figure xxx",
+    "Messenger-RNA / Change from Baseline - Soft threshold determination"
+  )) |>
+  add_figure(p, width = inches(6), height = inches(3))
+show_slate(p)
+```
+
+##### Network
+
+```{r, network}
+```
+
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+```
+
+```{r, gg_eigen_chg}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+
+p <- clean_slate() |>
+  add_figure(res$gg)
+
+show_slate(p)
 ```
 
 
