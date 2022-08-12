@@ -3,6 +3,8 @@ title: "WGCNA"
 subtitle: Program 11
 author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d')`"
+params:
+  basenm: t2d_11
 always_allow_html: true
 ---
 
@@ -75,7 +77,6 @@ https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGOD
 
 ```{r, cfg_prog}
 cfg_prog <- yaml::read_yaml("_prog.yml")
-cfg_prog
 ```
 
 ```{r, settings}
@@ -86,6 +87,7 @@ knitr::opts_chunk$set(results = cfg_prog$knitr$results)
 
 source("R/ngs.R")
 source("R/inches.R")
+source("R/export_xl.R")
 ```
 
 ### Materials and Methods
@@ -141,7 +143,6 @@ ads <- adlb |>
     df
   })()
 
-ads
 ```
 
 ```{r, rna}
@@ -221,7 +222,6 @@ ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$allmirna
 col_fill <- "glu120"
 ```
 
-
 ```{r, filter, eval=TRUE}
 dta <- besd_mae |>
   (\(mae) mae[ , , ngs_assay])() |>
@@ -252,7 +252,7 @@ dta_traits <- colData(dta) |> droplevels()
 ```
 
 
-#### Sample clustering
+#### Sample clustering (OID 1)
 
 ```{r, sample_clustering, eval=TRUE}
 spl_clust <- hclust(dist(dta_expr), method = "complete")
@@ -327,18 +327,20 @@ p <- egg::ggarrange(
   padding = unit(0, "lines"),
   draw = FALSE
 )
+
 ```
 
-```{r, eval=cfg_prog$knitr$results!="hide"}
-#| fig-width: 11.7
-#| fig-height: 8.3
+```{r}
+oid <- 1
+title <- "miRNA / Baseline - Clustering dendrogram of samples based on their
+  Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
 p <- clean_slate() |>
   add_title(c(
-    "Figure xxx",
-    wrap_long_lines(
-      "Clustering dendrogram of samples based on their Euclidean distance
-      and trait heatmap"
-    )
+    paste0("Figure 11.",   oid),
+    wrap_long_lines(title)
   )) |>
   add_figure(p, height = inches(5)) |>
   add_note(c(
@@ -346,13 +348,25 @@ p <- clean_slate() |>
     between samples, _complete_ method was used for the hierarchical
     clustering."
   ))
-  
+
+oid <- stringr::str_pad(oid, 2, "left", "0")
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, ".pdf")),
+  file_graph_alone = 
+    file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, "_af.pdf"))
+)
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
 show_slate(p)
 ```
 
 #### Gene Clustering
 
-##### Soft threshold determination
+##### Soft threshold determination (OID 2)
 
 ```{r, sft_determination}
 library(WGCNA)
@@ -422,16 +436,31 @@ p2 <- ggplot(
 p <- egg::ggarrange(p1, p2, nrow = 1, draw = FALSE)
 ```
 
+```{r}
+oid <- 2
+title <- "Micro-RNA / Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
+p <- clean_slate() |>
+  add_title(c(
+    paste0("Figure 11.", oid),
+    title
+  )) |>
+  add_figure(p, width = inches(6), height = inches(3))
+
+oid <- stringr::str_pad(oid, 2, "left", "0")
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, ".pdf")),
+  file_graph_alone = 
+    file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, "_af.pdf"))
+)
+```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    "Micro-RNA / Baseline - Soft threshold determination"
-  )) |>
-  add_figure(p, width = inches(6), height = inches(3))
 show_slate(p)
 ```
 
@@ -455,24 +484,22 @@ gene_hc <- tom_dis |>
 # gene clustering
 dyn_mod <- cutreeDynamic(
   gene_hc,
-    cutHeight = ctrl_wgcna$cuttree$cut_height,
-    minClusterSize = ctrl_wgcna$cuttree$min_cluster_size,
-    method = "hybrid",
-    distM = tom_dis,
-    deepSplit = ctrl_wgcna$cuttree$deep_split,
-    pamRespectsDendro = FALSE
-  )
+  cutHeight = ctrl_wgcna$cuttree$cut_height,
+  minClusterSize = ctrl_wgcna$cuttree$min_cluster_size,
+  method = "hybrid",
+  distM = tom_dis,
+  deepSplit = ctrl_wgcna$cuttree$deep_split,
+  pamRespectsDendro = FALSE
+)
 dyn_col <- labels2colors(dyn_mod)
 
 # me: module eigengenes (also used to merge dyn_col)
 dyn_mge <- dta_expr |> WGCNA::mergeCloseModules(dyn_col)
-meig_ls <- dta_expr |> moduleEigengenes(dyn_col)
-meig <- meig_ls$eigengenes
-meig_dis <- 1 - cor(meig)
-meig_hc <- meig_dis |> as.dist() |> hclust(method = "average")
+meig <- dyn_mge$newMEs
 ```
 
 ```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+# Not exported yet
 WGCNA::plotDendroAndColors(
   dendro = gene_hc,
   colors = dyn_mge$color,
@@ -490,6 +517,10 @@ WGCNA::plotDendroAndColors(
 )
 graphics::par(mfrow = c(1, 1))
 ```
+
+#### Eigengenes exploration
+
+##### OID 3 - Heatmap
 
 ```{r, eig_traits_heatmap_functions}
 theme_custom_dend <- function(gg, ...) {
@@ -625,7 +656,7 @@ prep_col.character <- function(x) {
 
 ```
 
-```{r}
+```{r, wgcna_heatmap_graph}
 res <- gg_eigen(
   dta_traits |>
     subset(select = c(
@@ -641,18 +672,83 @@ res <- gg_eigen(
     as.matrix(),
   meig
 )
+```
 
+```{r}
+oid <- 3
+```
+
+```{r, export_wgcna_heatmap_graph}
+p <- clean_slate() |>
+  add_figure(res$gg)
+
+oid <- stringr::str_pad(oid, 2, "left", "0")
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, ".pdf")),
+  file_graph_alone = 
+    file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, "_af.pdf"))
+)
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-
-p <- clean_slate() |>
-  add_figure(res$gg)
-
 show_slate(p)
 ```
+
+##### OID 4 - Excel file
+
+```{r}
+oid <- 4
+title <- "miRNA at baseline - WGCNA modules"
+```
+
+```{r, export_data}
+spl_mod <- rbind(
+  dyn_mge$oldMEs |>
+    as.data.frame() |>
+    tibble::rownames_to_column("sample") |>
+    tidyr::pivot_longer(
+      cols = -"sample",
+      names_to = "module"
+    ) |>
+    within(type <- "raw_me"),
+  dyn_mge$newMEs |>
+    as.data.frame() |>
+    tibble::rownames_to_column("sample") |>
+    tidyr::pivot_longer(
+      cols = -"sample",
+      names_to = "module"
+    ) |>
+    within(type <- "merged_me")
+)
+
+ft_mod <- data.frame(
+  feature = colnames(dta_expr),
+  raw_me = dyn_col,
+  merged_me = dyn_mge$colors
+)
+
+oid <- stringr::str_pad(oid, 2, "left", "0")
+
+export_xl(
+  ft_mod = ft_mod,
+  spl_mod = spl_mod,
+  info = c(
+    title = title,
+    ft_mod = wrap_long_lines(
+      "Associate genetic features with calculated module (a feature belongs to
+      a module)"
+    ),
+    spl_mod = "Sample eigengen value (eigengen _expression profile_)",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = paste0(params$basenm, "_", oid)
+)
+```
+
 
 ### mRNA / Baseline
 
@@ -669,51 +765,48 @@ ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$mrna
 ```
 
 
-#### Sample clustering
+#### Sample clustering (OID 5)
 
 ```{r, sample_clustering, eval=TRUE}
 ```
 
+```{r}
+oid <- 5
+title <- "mRNA / Baseline -Clustering dendrogram of samples based on their
+  Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
+```
+
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    wrap_long_lines(
-      "Clustering dendrogram of samples based on their Euclidean distance
-      and trait heatmap"
-    )
-  )) |>
-  add_figure(p, height = inches(5)) |>
-  add_note(c(
-    "Note: VST transformed expression matrix used to estimate distances
-    between samples, _complete_ method was used for the hierarchical
-    clustering."
-  ))
-  
 show_slate(p)
 ```
 
+
 #### Gene Clustering
 
-##### Soft threshold determination
+##### Soft threshold determination (OID 6)
 
 ```{r, sft_determination}
 ```
 
+```{r}
+oid <- 6
+title <- "mRNA / Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
+```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    "Messenger-RNA / Baseline - Soft threshold determination"
-  )) |>
-  add_figure(p, width = inches(6), height = inches(3))
 show_slate(p)
 ```
+
 
 ##### Network
 
@@ -723,17 +816,53 @@ show_slate(p)
 ```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
 ```
 
+
+#### Eigengenes exploration
+
+##### OID 7 - Heatmap
+
 ```{r, eig_traits_heatmap}
+```
+
+```{r, wgcna_heatmap_graph_oid7}
+res <- gg_eigen(
+  dta_traits |>
+    subset(select = c(
+      diabcd, diab, age, trainn,
+      chol, glu0, glu120, glu30, glu60, hba1c, hdl,
+      homab, homair, insulin0, insulin120, insulin30, insulin60, ldl,
+      matsuda, trig, bmi, bodyfatp, dcal, dcarbt, dfatt,
+      dprot, fatacfr, fatmass, leanmass, smmass, vat, vo2maxe,
+      vo2maxlbm, vo2maxml, weight
+    )) |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
+  meig
+)
+```
+
+```{r}
+oid <- 7
+```
+
+```{r, export_wgcna_heatmap_graph}
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-
-p <- clean_slate() |>
-  add_figure(res$gg)
-
 show_slate(p)
+```
+
+##### OID 8 - Excel file
+
+```{r}
+oid <- 8
+title <- "mRNA at baseline - WGCNA modules"
+```
+
+```{r, export_data}
 ```
 
 ### miRNA / CHG
@@ -846,51 +975,48 @@ dta_traits <- colData(dta) |> droplevels()
 
 ```
 
-#### Sample Clustering
+#### Sample Clustering (OID 9)
 
-```{r, sample_clustering}
+```{r, sample_clustering, eval=TRUE}
+```
+
+```{r}
+oid <- 9
+title <- "miRNA / Change from Baseline - Clustering dendrogram of samples based
+  on their Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    wrap_long_lines(
-      "Clustering dendrogram of samples based on their Euclidean distance
-      and trait heatmap"
-    )
-  )) |>
-  add_figure(p, height = inches(5)) |>
-  add_note(c(
-    "Note: VST transformed expression matrix used to estimate distances
-    between samples, _complete_ method was used for the hierarchical
-    clustering."
-  ))
-  
 show_slate(p)
 ```
 
+
 #### Gene Clustering
 
-##### Soft threshold determination
+##### Soft threshold determination (OID 10)
 
 ```{r, sft_determination}
 ```
 
+```{r}
+oid <- 10
+title <- "Micro-RNA / Change from Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
+```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    "Micro-RNA / Change from Baseline - Soft threshold determination"
-  )) |>
-  add_figure(p, width = inches(6), height = inches(3))
 show_slate(p)
 ```
+
 
 ##### Network
 
@@ -900,7 +1026,15 @@ show_slate(p)
 ```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
 ```
 
-```{r, gg_eigen_chg}
+
+#### Eigengenes exploration
+
+##### OID 11 - Heatmap
+
+```{r, eig_traits_heatmap}
+```
+
+```{r, wgcna_heatmap_graph_oid11}
 res <- gg_eigen(
   dta_traits |>
     (\(df) df[sapply(
@@ -912,18 +1046,31 @@ res <- gg_eigen(
     as.matrix(),
   meig
 )
+```
 
+```{r}
+oid <- 11
+```
+
+```{r, export_wgcna_heatmap_graph}
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-
-p <- clean_slate() |>
-  add_figure(res$gg)
-
 show_slate(p)
 ```
+
+##### OID 12 - Excel file
+
+```{r}
+oid <- 12
+title <- "miRNA Change from Baseline - WGCNA modules"
+```
+
+```{r, export_data}
+```
+
 
 ### mRNA / CHG
 
@@ -942,49 +1089,45 @@ col_fill <- "glu120_chg"
 ```{r, prep_data_chg}
 ```
 
-#### Sample Clustering
+#### Sample Clustering (OID 13)
 
-```{r, sample_clustering}
+```{r, sample_clustering, eval=TRUE}
+```
+
+```{r}
+oid <- 13
+title <- "mRNA / Change from Baseline - Clustering dendrogram of samples based
+  on their Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    wrap_long_lines(
-      "Clustering dendrogram of samples based on their Euclidean distance
-      and trait heatmap"
-    )
-  )) |>
-  add_figure(p, height = inches(5)) |>
-  add_note(c(
-    "Note: VST transformed expression matrix used to estimate distances
-    between samples, _complete_ method was used for the hierarchical
-    clustering."
-  ))
-  
 show_slate(p)
 ```
 
+
 #### Gene Clustering
 
-##### Soft threshold determination
+##### Soft threshold determination (OID 14)
 
 ```{r, sft_determination}
 ```
 
+```{r}
+oid <- 14
+title <- "mRNA / Change from Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
+```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-p <- clean_slate() |>
-  add_title(c(
-    "Figure xxx",
-    "Messenger-RNA / Change from Baseline - Soft threshold determination"
-  )) |>
-  add_figure(p, width = inches(6), height = inches(3))
 show_slate(p)
 ```
 
@@ -996,19 +1139,50 @@ show_slate(p)
 ```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
 ```
 
-```{r, gg_eigen_chg}
+
+#### Eigengenes exploration
+
+##### OID 15 - Heatmap
+
+```{r, eig_traits_heatmap}
+```
+
+```{r, wgcna_heatmap_graph_oid15}
+res <- gg_eigen(
+  dta_traits |>
+    (\(df) df[sapply(
+       df,
+       function(x) if (is.numeric(x)) sd(x) > 0 else length(unique(x)) > 1
+     )]) () |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
+  meig
+)
+```
+
+```{r}
+oid <- 15
+```
+
+```{r, export_wgcna_heatmap_graph}
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
 #| fig-height: 8.3
-
-p <- clean_slate() |>
-  add_figure(res$gg)
-
 show_slate(p)
 ```
 
+##### OID 16 - Excel file
+
+```{r}
+oid <- 16
+title <- "mRNA Change from Baseline - WGCNA modules"
+```
+
+```{r, export_data}
+```
 
 ### Legacy
 
