@@ -745,7 +745,8 @@ export_xl(
     source = "UMB-BESD"
   ),
   dir = cfg_prog$paths$grh,
-  basenm = paste0(params$basenm, "_", oid)
+  basenm = paste0(params$basenm, "_", oid),
+  rdata = TRUE
 )
 ```
 
@@ -764,6 +765,22 @@ ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$mrna
 ```{r, filter}
 ```
 
+```{r}
+expr_desc <- "mRNA / Baseline - VST"
+exportas <- "dta_11_01.RData"
+```
+
+```{r, save_expr_dta}
+attr(dta_expr, "desc") <- expr_desc
+attr(dta_expr, "label") <- "Variance-Stabilised Transformed expression matrix"
+
+knitr::kable(dta_expr[1:5, 1:3])
+filenm <- file.path(cfg_prog$paths$dta, exportas)
+save(dta_expr, file = filenm)
+message("Export: ", filenm)
+
+rm(expr_desc, exportas)
+```
 
 #### Sample clustering (OID 5)
 

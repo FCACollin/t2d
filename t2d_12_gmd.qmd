@@ -1,0 +1,95 @@
+---
+title: "GSEA / WGCNA Mod"
+subtitle: Program 12
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+params:
+  basenm: t2d_12
+always_allow_html: true
+---
+
+
+## mRNA Seq / miRNA - WGCNA
+
+
+The WGCNA module identification was followed by gene set enrichment analysis.
+To do
+so, the correlation between gene expression (Variance-Stabilized Transformed
+values, VST) and the eigengene estimated in every module was used as a 
+measure of module membership. Then, for every module, genesets as defined
+by the Gene Ontology (GO) project were selected if at least 10 genes belonged
+to the module. Then, the GSEA procedure was run while considering
+all expressed genes with existing _entrez gene_ id and determining an
+enrichment score and associated p.value based on 10000 random permutations.
+The result focused specifically on enriched and up-regulated genesets, i.e.
+genesets with over representation of genes with higher
+correlation with the eigengene within each module.
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `MultiAssayExperiment` for management of multi-omics experiment objects
+  [version 1.22.0, @Ramos2017]
+- `DESeq2` for differential expression analysis and
+  variance stabilizing transformation [version 1.36.0, @Love2014]
+- `cowplot` for figure composition [version 1.1.1, @Wilke2020]
+- `ggplot2` for graphics [version 3.3.6, @Wickham2016]
+- `WGCNA` for gene clustering [version 1.71, @Langfelder2008, @Langfelder2012].
+
+
+```{r, cfg_prog}
+cfg_prog <- yaml::read_yaml("_prog.yml")
+```
+
+```{r, settings}
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = cfg_prog$knitr$results)
+
+```
+
+```{r}
+vst_file <- file.path(cfg_prog$paths$dta, "dta_11_01.RData")
+wcn_file <- file.path(cfg_prog$paths$grh, "t2d_11_08.RData")
+
+load(file = filenm, verbose = TRUE)
+knitr::kable(dta_expr[1:5, 1:3])
+load(file = wcn_file, verbose = TRUE)
+```
+
+    _To do so, the correlation between gene expression (Variance-Stabilized
+    Transformed values, VST) and the eigengene estimated in every module was
+    used as a measure of module membership._
+
+```{r}
+library(tidyr)
+
+# mm: module membership
+mm <- wcn$spl_mod |>
+  subset(type == "merged_me", select = -type) |>
+  pivot_wider(names_from = module) |>
+  (\(df, ft = dta_expr) {
+    mat <- as.matrix(df[, -1])
+    rownames(mat) <- df[[1]]
+    # Samples (by row) must be in the same order as in the feature
+    # expression matrix.
+    mat[rownames(ft), ]
+  })() |>
+  cor(dta_expr) |>
+  asplit(MARGIN = 1)
+
+lapply(mm, round, digits = 2) |>
+  lapply(head)
+```
+
+    _ Then, for every module, genesets as defined by the Gene Ontology (GO)
+    project were selected if at least 10 genes belonged to the module._
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
+```

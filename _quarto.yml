@@ -22,6 +22,7 @@ book:
     - t2d_07_mir.qmd # miR DE analysis
 #    - t2d_10_chg.qmd # deprecated
     - t2d_11_wcn.qmd # miR DE analysis
+    - t2d_13_gea.qmd
     - references.qmd
 
 bibliography: references.bib
