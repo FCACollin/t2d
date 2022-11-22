@@ -309,7 +309,7 @@ gsea_wrapper <- function(df,
   res <- list()
   res$lfc <- merge(df, gi, by.x = "feature", by.y = "ensembl_gene_id")
 
-  message("dim res$df: ", paste(dim(iris), collapse = " x "))
+  message("dim res$df: ", paste(dim(df), collapse = " x "))
   assertthat::assert_that(
     all(!is.na(res$entrezgene_id)),
     all(table(res$entrezgene_id) == 1L)
@@ -373,7 +373,7 @@ result |>
 result |>
   lapply(\(x) dim(x$gsea))
 ```
-### GSEA/Intervention Induced DE by Diabetes Group
+### GSEA/DE between Diabetes Group at Baseline
 
 ```{r}
 out_file <- "../data/dta_13_03.RData"
@@ -384,7 +384,36 @@ out_file <- "../data/dta_13_03.RData"
 # differential expression.
 result <- "../tlg/graph/fig_07_03.xlsx" |>
   openxlsx::read.xlsx(sheet = "fig_07_03", startRow = 2, rowNames = TRUE) |>
-  subset(ctrs %in% c("T2D vs IGT", "T2D vs NGT"))
+  subset(ctrs %in% c("T2D vs IGT", "T2D vs NGT")) |>
+  (\(df) split(df, f = df["ctrs"]))() |>
+  lapply(gs = gsets, gsea_wrapper)
+
+save(result, file = out_file)
+```
+
+```{r, eval=file.exists(out_file)}
+load(out_file, verbose = TRUE)
+```
+
+```{r}
+result |>
+  lapply(\(x) head(x$gsea))
+result |>
+  lapply(\(x) dim(x$gsea))
+```
+
+### GSEA/DE between Diabetes Group at Month 3
+
+```{r}
+out_file <- "../data/dta_13_04.RData"
+```
+
+```{r, eval=Negate(file.exists)(out_file)}
+# disregard the contrast IGT vs NGT because of the very low level of
+# differential expression.
+result <- "../tlg/graph/fig_07_07.xlsx" |>
+  openxlsx::read.xlsx(sheet = "fig_07_07", startRow = 2, rowNames = TRUE) |>
+  subset(ctrs %in% c("T2D vs IGT", "T2D vs NGT")) |>
   (\(df) split(df, f = df["ctrs"]))() |>
   lapply(gs = gsets, gsea_wrapper)
 
