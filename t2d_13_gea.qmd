@@ -8,13 +8,23 @@ params:
 always_allow_html: true
 ---
 
+```{r, cfg_prog}
+cfg_prog <- yaml::read_yaml("_prog.yml")
+```
+
 ## mRNA Seq / GSEA on DE
 
 Note: 221107, the gsea analysis is replicable.
 
-```{r, gene_ingo, eval=TRUE}
+```{r, settings}
 devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = cfg_prog$knitr$results)
+library(assertthat)
+library(ggplot2)
 source("R/ngs.R")
+source("R/inches.R")
 source("R/export_xl.R")
 ```
 
@@ -72,6 +82,24 @@ gsets <- as.list(org.Hs.eg.db::org.Hs.egGO2EG)
 ### GSEA preparation (helper functions)
 
 ```{r, gsea_helper_functions, eval=TRUE}
+#' Abbreviate Description
+#'
+#' @param x (`character`)
+#' @param n_char (`numeric`)
+#' @export
+#'
+desc_abbreviate <- function(x, n_char = 50) {
+  need_short <- nchar(as.character(x)) > n_char
+  x[need_short] <- paste(
+    substr(
+      x = x[need_short],
+      start = 1,
+      stop = n_char
+    ), "..."
+  )
+  x
+}
+
 ## helper_functions ----
 
 #' Geneset Preparation
@@ -373,6 +401,156 @@ result |>
 result |>
   lapply(\(x) dim(x$gsea))
 ```
+
+```{r, f13_01_cfg}
+contrast <- "chg NGT"
+de_name <- " following Intervention"
+```
+
+```{r, soapy}
+dta <- result[[contrast]]$gsea |>
+  within({
+    short_desc <- desc_abbreviate(short_desc)
+    short_desc <- factor(short_desc, unique(short_desc[order(gene_ratio)]))
+  }) |>
+  subset(representation == "enrichment") |>
+  (\(df) {
+    df <- if (sum(df$padj < 0.05 & df$gene_ratio > 0.2) < 5) {
+      df <- y[order(df$padj), ]
+      df[seq_len(min(c(nrow(df), 5))), ]
+    } else {
+      df[df$padj < 0.05 & df$gene_ratio > 0.2, ]
+    }
+  }) ()
+
+library(ggplot2)
+gg <- ggplot(
+  dta,
+  aes_string(
+    x = "gene_ratio",
+    color = "padj",
+    y = "short_desc",
+    size = "count",
+    shape = "regulation"
+  )
+) +
+  geom_point() +
+  scale_colour_gradient(low = "black", high = "gray80") +
+  scale_size(breaks = c(10, 50, 100, 500, 1000)) +
+  scale_shape_manual(values = c(1, 19)) +
+  guides(
+    colour = guide_colourbar(title = "P.adj:"),
+    shape = guide_legend(title = "Regulation: "),
+    size = guide_legend(title = "Count: ")
+  ) +
+  coord_cartesian(clip = "off") +
+  facet_grid(cat ~ ., scales = "free", space = "free") +
+  labs(title = paste0("[mRNA] ", contrast, de_name)) +
+  xlab("Gene Ratio") +
+  ylab("Gene Ratio") +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_blank(),
+    legend.position = "right",
+    legend.box = "vertical",
+    legend.text = element_text(size = 8, hjust = 0),
+    legend.box.just = "left",
+    panel.border = element_rect(fill = NA),
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r, f13_01_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.1",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed after exercise intervention in NGT group ",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_01.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_01_af.pdf")
+)
+```
+
+```{r, f13_01_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_01_cln}
+rm(gg, p)
+```
+
+```{r, f13_02_cfg}
+contrast <- "chg T2D"
+de_name <- " following Intervention"
+```
+
+```{r, soapy}
+```
+
+```{r, f13_02_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.2",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed after exercise intervention in T2D group ",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_02.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_02_af.pdf")
+)
+```
+
+```{r, f13_02_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_02_cln}
+rm(gg, p)
+```
+
 ### GSEA/DE between Diabetes Group at Baseline
 
 ```{r}
@@ -400,6 +578,54 @@ result |>
   lapply(\(x) head(x$gsea))
 result |>
   lapply(\(x) dim(x$gsea))
+```
+
+```{r, f13_04_cfg}
+contrast <- "T2D vs NGT"
+de_name <- " at Baseline"
+```
+
+```{r, soapy}
+```
+
+```{r, f13_04_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.4",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed in T2D group compared to NGT group after intervention",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_04.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_04_af.pdf")
+)
+```
+
+```{r, f13_03_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_03_cln}
+rm(gg, p)
 ```
 
 ### GSEA/DE between Diabetes Group at Month 3
@@ -431,6 +657,54 @@ result |>
   lapply(\(x) dim(x$gsea))
 ```
 
+```{r, soapy_m3_t2dvsngt}
+contrast <- "T2D vs NGT"
+de_name <- "After Intervention"
+```
+
+```{r, soapy}
+```
+
+```{r, f13_03_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.3",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed in T2D group compared to NGT group at baseline",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_03.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_03_af.pdf")
+)
+```
+
+```{r, f13_04_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_04_cln}
+rm(gg, p)
+```
+```
 ## Session Informations
 
 ```{r}

@@ -47,3 +47,9 @@ To install:
 
 The computational environment was containerized into a Docker image build upon
 `rocker/verse:4.2.0`.
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+params$paths |>
+  lapply(\(x) if (!dir.exists(x)) dir.create(x))
+```

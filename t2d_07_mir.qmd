@@ -1495,7 +1495,7 @@ export_as(
 show_slate(p)
 ```
 
-## `dds_6` - DE: Exercise intervention, all micro RNA
+## `dds_6` - DE: Exercise intervention, mRNA
 
 ```{r, dds_6_dta}
 ctrl <- cfg_prog$rna
