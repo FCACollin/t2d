@@ -12,9 +12,27 @@ always_allow_html: true
 cfg_prog <- yaml::read_yaml("_prog.yml")
 ```
 
-## mRNA Seq / GSEA on DE
+## mRNA Seq / GSEA
 
-Note: 221107, the gsea analysis is replicable.
+The Gene Set Enrichment Analysis (GSEA) aimed at transforming the
+interpretation of the differential expression of individual genes
+to a collection (or set) of genes enriched in differentially expressed genes.
+The set of genes being associated with
+identified functions, processes, molecules, diseases, pathways, etc,
+it offers a higher level of interpretation for the differential
+expression analysis.
+
+
+Two sources of gene sets were used: Gene Ontology Terms (GO).
+The analysis will be extended to the Kyoto Encyclopedia of Genes and Genomes
+(KEGG).
+
+The analysis was run on all mRNA Differential Analysis contrasts using
+R and the package `liger` [@Fan2019]. The results focused on enriched
+gene sets with indication of up or down regulation while reporting the
+proportion of genes being found differentially expressed in each gene set.
+
+**Note: 221107, the gsea analysis is replicable.**
 
 ```{r, settings}
 devtools::load_all("src/pkg/dbs.data")
@@ -410,9 +428,12 @@ de_name <- " following Intervention"
 ```{r, soapy}
 dta <- result[[contrast]]$gsea |>
   within({
+    term <- short_desc
     short_desc <- desc_abbreviate(short_desc)
     short_desc <- factor(short_desc, unique(short_desc[order(gene_ratio)]))
-  }) |>
+  })
+
+dta_sel <- dta |>
   subset(representation == "enrichment") |>
   (\(df) {
     df <- if (sum(df$padj < 0.05 & df$gene_ratio > 0.2) < 5) {
@@ -425,7 +446,7 @@ dta <- result[[contrast]]$gsea |>
 
 library(ggplot2)
 gg <- ggplot(
-  dta,
+  dta_sel,
   aes_string(
     x = "gene_ratio",
     color = "padj",
@@ -491,6 +512,15 @@ export_as(
   file = file.path(cfg_prog$paths$grh, "fig_13_01.pdf"),
   file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_01_af.pdf")
 )
+export_xl(
+  fig_13_01 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_01"
+)
 ```
 
 ```{r, f13_01_sh, eval=cfg_prog$knitr$results!="hide"}
@@ -500,7 +530,7 @@ show_slate(p)
 ```
 
 ```{r, f13_01_cln}
-rm(gg, p)
+rm(gg, p, dta, dta_sel, contrast, de_name)
 ```
 
 ```{r, f13_02_cfg}
@@ -539,6 +569,15 @@ export_as(
   file = file.path(cfg_prog$paths$grh, "fig_13_02.pdf"),
   file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_02_af.pdf")
 )
+export_xl(
+  fig_13_02 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_02"
+)
 ```
 
 ```{r, f13_02_sh, eval=cfg_prog$knitr$results!="hide"}
@@ -548,13 +587,13 @@ show_slate(p)
 ```
 
 ```{r, f13_02_cln}
-rm(gg, p)
+rm(gg, p, dta, dta_sel, contrast, de_name)
 ```
 
 ### GSEA/DE between Diabetes Group at Baseline
 
 ```{r}
-out_file <- "../data/dta_13_03.RData"
+out_file <- "../data/dta_13_04.RData"
 ```
 
 ```{r, eval=Negate(file.exists)(out_file)}
@@ -596,7 +635,7 @@ p <- clean_slate() |>
       "Figure 13.4",
       strwrap(
         "Bubble plot - Gene ontology genesets enriched with gene differentially
-        expressed in T2D group compared to NGT group after intervention",
+        expressed in T2D group compared to NGT group at Baseline",
         width = 80
       ),
       "Analysis Set: Full Analysis Set"
@@ -616,22 +655,31 @@ export_as(
   file = file.path(cfg_prog$paths$grh, "fig_13_04.pdf"),
   file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_04_af.pdf")
 )
+export_xl(
+  fig_13_04 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_04"
+)
 ```
 
-```{r, f13_03_sh, eval=cfg_prog$knitr$results!="hide"}
+```{r, f13_04_sh, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 8.3
 #| fig-height: 11.7
 show_slate(p)
 ```
 
-```{r, f13_03_cln}
-rm(gg, p)
+```{r, f13_04_cln}
+rm(gg, p, dta, dta_sel, contrast, de_name)
 ```
 
 ### GSEA/DE between Diabetes Group at Month 3
 
 ```{r}
-out_file <- "../data/dta_13_04.RData"
+out_file <- "../data/dta_13_03.RData"
 ```
 
 ```{r, eval=Negate(file.exists)(out_file)}
@@ -644,6 +692,16 @@ result <- "../tlg/graph/fig_07_07.xlsx" |>
   lapply(gs = gsets, gsea_wrapper)
 
 save(result, file = out_file)
+export_xl(
+  fig_07_03 = dds_2_est,
+  info = c(
+    title =
+      "mRNA at baseline - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_03"
+)
 ```
 
 ```{r, eval=file.exists(out_file)}
@@ -693,18 +751,27 @@ export_as(
   file = file.path(cfg_prog$paths$grh, "fig_13_03.pdf"),
   file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_03_af.pdf")
 )
+export_xl(
+  fig_13_03 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_03"
+)
 ```
 
-```{r, f13_04_sh, eval=cfg_prog$knitr$results!="hide"}
+```{r, f13_03_sh, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 8.3
 #| fig-height: 11.7
 show_slate(p)
 ```
 
-```{r, f13_04_cln}
-rm(gg, p)
+```{r, f13_03_cln}
+rm(gg, p, dta, dta_sel, contrast, de_name)
 ```
-```
+
 ## Session Informations
 
 ```{r}

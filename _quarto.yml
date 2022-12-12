@@ -36,7 +36,7 @@ format:
     page-layout: full
     code-block-bg: true
     code-block-border-left: "#31BAE9"
-    code-fold: show
+    code-fold: true
     code-link: true
     code-overflow: wrap
     code-summary: "Show the code"

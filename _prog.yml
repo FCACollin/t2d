@@ -3,7 +3,7 @@ version: 0.1.0-alpha
 dock:
   version: 0.1.0-alpha
 knitr:
-  results: markup # markup, asis, hold, hide
+  results: hide # markup, asis, hold, hide
 paths:
   tlg: ../tlg
   tab: ../tlg/tables
