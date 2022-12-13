@@ -122,6 +122,10 @@ code span.kw {
   color: #fa8d3e;
 }
 
+pre > code.sourceCode > span {
+  color: #575f66;
+}
+
 code span {
   color: #575f66;
 }

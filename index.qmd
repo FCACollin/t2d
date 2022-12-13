@@ -24,7 +24,7 @@ and complemented by Bioconductor packages (release 3.15):
 
 - `BiocParallel`
 - `car` for regression model test [version 3.0-13, @Fox2019]
-- `cowplot`
+- `cowplot` for figure composition [version 1.1.1, @Wilke2020]
 - `DESeq2` for differential expression analysis and
   variance stabilizing transformation [version 1.36.0, @Love2014]
 - `emmeans` for least-Squares Means (LSM) estimations [version 1.7.3, @Lenth2022]
@@ -37,8 +37,8 @@ and complemented by Bioconductor packages (release 3.15):
 - `multcompView`
 - `MultiAssayExperiment` for management of multi-omics experiment objects
   [version 1.22.0, @Ramos2017]
-- `tidyr` for data wrangling [version 1.2.0, @Wickham2022].
-
+- `tidyr` for data wrangling [version 1.2.0, @Wickham2022]
+- `WGCNA` for gene clustering [version 1.71, @Langfelder2008, @Langfelder2012].
 
 To install:
 
@@ -47,3 +47,9 @@ To install:
 
 The computational environment was containerized into a Docker image build upon
 `rocker/verse:4.2.0`.
+
+```{r, settings}
+params <- yaml::read_yaml("_prog.yml")
+params$paths |>
+  lapply(\(x) if (!dir.exists(x)) dir.create(x))
+```

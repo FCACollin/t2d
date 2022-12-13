@@ -1,0 +1,779 @@
+---
+title: "GSEA / DE Results"
+subtitle: Program 13
+author: "Francois Collin"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+params:
+  basenm: t2d_13
+always_allow_html: true
+---
+
+```{r, cfg_prog}
+cfg_prog <- yaml::read_yaml("_prog.yml")
+```
+
+## mRNA Seq / GSEA
+
+The Gene Set Enrichment Analysis (GSEA) aimed at transforming the
+interpretation of the differential expression of individual genes
+to a collection (or set) of genes enriched in differentially expressed genes.
+The set of genes being associated with
+identified functions, processes, molecules, diseases, pathways, etc,
+it offers a higher level of interpretation for the differential
+expression analysis.
+
+
+Two sources of gene sets were used: Gene Ontology Terms (GO).
+The analysis will be extended to the Kyoto Encyclopedia of Genes and Genomes
+(KEGG).
+
+The analysis was run on all mRNA Differential Analysis contrasts using
+R and the package `liger` [@Fan2019]. The results focused on enriched
+gene sets with indication of up or down regulation while reporting the
+proportion of genes being found differentially expressed in each gene set.
+
+**Note: 221107, the gsea analysis is replicable.**
+
+```{r, settings}
+devtools::load_all("src/pkg/dbs.data")
+devtools::load_all("src/pkg/latarnia.utils")
+
+knitr::opts_chunk$set(results = cfg_prog$knitr$results)
+library(assertthat)
+library(ggplot2)
+source("R/ngs.R")
+source("R/inches.R")
+source("R/export_xl.R")
+```
+
+### Gene info
+
+```{r, gene_info_out_file}
+out_file <- "../data/dta_13_02_gene_info.RData"
+```
+
+```{r, gene_info_query_save, eval=Negate(file.exists)(out_file)}
+# GO needs entrezgene_id
+gene_info <- biomaRt::listEnsemblArchives() |>
+  subset(date == "Jul 2019", select = "url") |>
+  unlist(use.names = FALSE) |>
+  biomaRt::useMart(
+    biomart = "ensembl",
+    dataset = "hsapiens_gene_ensembl",
+    host = _
+  ) |>
+  # the biomaRt::getBM does not work well inside lapply (I don't know why)
+  # + but also more efficient to get all genes data once instead of
+  # + repeating the request for overlapping genes.
+  biomaRt::getBM(
+    mart = _,
+    attributes = c(
+      "ensembl_gene_id",
+      "ensembl_gene_id_version",
+      "external_gene_name",
+      "entrezgene_id",
+      "entrezgene_accession",
+      "chromosome_name"
+    ),
+    filters = "ensembl_gene_id",
+    values = rownames(dbs.data::mrna_raw),
+    useCache = FALSE
+  )
+
+save(gene_info, file = out_file)
+```
+
+```{r, gene_info_load, eval=file.exists(out_file)}
+load(out_file, verbose = TRUE)
+```
+
+```{r, gene_info_head}
+gene_info |>
+  head() |>
+  knitr::kable()
+```
+
+```{r, readingenesets}
+gsets <- as.list(org.Hs.eg.db::org.Hs.egGO2EG)
+```
+
+### GSEA preparation (helper functions)
+
+```{r, gsea_helper_functions, eval=TRUE}
+#' Abbreviate Description
+#'
+#' @param x (`character`)
+#' @param n_char (`numeric`)
+#' @export
+#'
+desc_abbreviate <- function(x, n_char = 50) {
+  need_short <- nchar(as.character(x)) > n_char
+  x[need_short] <- paste(
+    substr(
+      x = x[need_short],
+      start = 1,
+      stop = n_char
+    ), "..."
+  )
+  x
+}
+
+## helper_functions ----
+
+#' Geneset Preparation
+#'
+#' Set a list of genesets including at least three genes from a genepool.
+#'
+#' @param gsets (`list`)\cr a named list of genes.
+#' @param universe (`character`)\cr what range of genes to consider.
+#' @param control (`list`)\cr set the number of cores to run and
+#'   the minimum number of genes is returned gene sets
+#' @export
+#' @details
+#' Restrict each gene set to the genes present in the gene background.
+#' Restrict gene sets including at least 3 genes.
+#'
+list_genesets <- function(gsets,
+                          universe,
+                          control = list(
+                            mingeneinset_gsea = 5,
+                            minpctgeneinsetgsea = 20,
+                            n_cores = parallel::detectCores()
+                          )) {
+
+  universe <- as.character(universe)
+  universe <- unique(universe)
+
+  # Restrict gsets to universe.
+  gsets <- parallel::mclapply(
+    X = gsets,
+    universe = universe,
+    FUN = function(x, universe) {
+      y <- unique(x[as.character(x) %in% universe])
+      attr(y, "Geneset size (nsub)") <- length(x)
+      attr(y, "Geneset x Universe intersection size (n)") <- length(y)
+      attr(y, "Geneset x Universe intersection size (pct)") <-
+        attr(y, "Geneset x Universe intersection size (n)") /
+        attr(y, "Geneset size (nsub)") * 100
+      y
+    },
+    mc.cores = control$n_cores
+  )
+
+  gsets_length <- parallel::mclapply(
+    gsets,
+    FUN = attr, which = "Geneset x Universe intersection size (n)",
+    mc.cores = control$n_cores
+  )
+  gsets <- gsets[unlist(gsets_length) >= unlist(control$mingeneinset_gsea)]
+
+  gsets_pct <- parallel::mclapply(
+    gsets,
+    FUN = attr, which = "Geneset x Universe intersection size (pct)",
+    mc.cores = control$n_cores
+  )
+  gsets <- gsets[unlist(gsets_pct) >= unlist(control$minpctgeneinsetgsea)]
+
+  # Probably to be removed, but requires impact assessment:
+  gsets <- parallel::mclapply(
+    gsets,
+    FUN = function(x) {
+      attr(x, "genes in universe") <- length(x)
+      x
+    },
+    mc.cores = control$n_cores
+  )
+  attr(gsets, "control") <- control
+  gsets
+}
+
+#' BESD: GSEA
+#'
+#' Optimized Gene Set Enrichment Analysis for BESD.
+#'
+#' @param lfc (`numeric`)\cr Log2-Fold Change.
+#' @param nm (`character`)\cr gene name, same length as `lfc`.
+#' @param gset (`list`)\cr named list of genesets, prepared with
+#'   `list_genesets`.
+#' @param control (`list`)\cr list of settings as provided by `control_rna()`.
+#'
+#' @export
+#' @details
+#' Interpretation relies on:
+#' <https://cran.r-project.org/web/packages/liger/vignettes/interpreting.pdf>
+#'
+besd_gsea_analysis <- function(lfc,
+                               nm,
+                               gset,
+                               control = list(
+                                 n_cores = parallel::detectCores(),
+                                 n_rand_gsea = 1e4
+                               )) {
+
+  time_start <- Sys.time()
+  values <- setNames(object = lfc, nm = nm)
+  y <- lapply(
+    X = gset,
+    values = values,
+    FUN = function(x, values = values)
+      liger::gsea(
+        values = values,
+        geneset = x,
+        mc.cores = control$n_cores,
+        plot = FALSE,
+        n.rand = control$n_rand_gsea,
+        return.details = TRUE
+      )
+  )
+  y <- lapply(y, t)
+  y <- lapply(y, as.data.frame)
+  y <- do.call(rbind, y)
+  y <- cbind(
+    gset = names(gset),
+    y
+  )
+
+  time_end <- Sys.time();
+  attr(y, "gsea_time") <- list(
+    start = time_start,
+    end = time_end,
+    duration = time_end - time_start
+  )
+  attr(y, "controls") <- control
+  attr(y, "gene_lfc") <- values
+  y
+
+}
+
+#' Labels
+#'
+#' Get and set labels.
+#' @name label
+#'
+NULL
+
+#' @describeIn label set label.
+#' @param x (any)\cr any object to attribute a label to.
+#' @param value (any)\cr the information used as a label for `x`.
+#' @export
+#' @examples
+#' a <- 0
+#' label(a) <- "A value of interest"
+#'
+`label<-` <- function(x, value) {
+  attr(x, "label") <- value
+  x
+}
+
+#' @describeIn label get label.
+#' @export
+#' @examples
+#' label(a)
+#'
+label <- function(x) attr(x, "label")
+
+#' GO Description
+#'
+#' For genesets.
+#'
+#' @param id (`character`)\cr the GO ID.
+#' @param de_bg (`data.frame`)\cr includes `padj` and `entrezgene_id`
+#'   columns.
+#' @param go_desc (`list`)\cr gene set description as provided by
+#'   [GO.db::GOTERM].
+#' @param go_compo (`list`)\cr gene set composition as provided by
+#'   [org.Hs.eg.db::org.Hs.egGO2EG].
+#'
+#' @return `data.frame`
+#'
+#' @export
+#' @note
+#' Because of the selection of DE gene involved in the Gene Ratio,
+#' it is possible that Gene Ratio reaches 0.
+#'
+describe_go <- function(id,
+                        de_bg,
+                        go_desc = as.list(GO.db::GOTERM),
+                        go_compo = as.list(org.Hs.eg.db::org.Hs.egGO2EG)) {
+
+  assertthat::assert_that(
+    "padj" %in% colnames(de_bg),
+    "entrezgene_id" %in% colnames(de_bg)
+  )
+  de_bg$entrezgene_id <- as.character(de_bg$entrezgene_id)
+
+  y <- lapply(
+    X = id,
+    de_bg = de_bg,
+    go_desc = go_desc,
+    go_compo = go_compo,
+    FUN = function(x, de_bg, go_desc, go_compo) {
+      y <- go_desc[[x]]
+      go_compo <- go_compo[[x]]
+      go_compo <- go_compo[
+        go_compo %in% de_bg$entrezgene_id
+      ]
+      de_gene_in_go <- de_bg$entrezgene_id[
+        de_bg$entrezgene_id %in% go_compo &
+          de_bg$padj < 0.05
+      ]
+      data.frame(
+        source = "GO",
+        id = AnnotationDbi::GOID(y),
+        cat = AnnotationDbi::Ontology(y),
+        short_desc = AnnotationDbi::Term(y),
+        size = length(go_compo),
+        count = length(de_gene_in_go),
+        gene_ratio = length(de_gene_in_go) / length(go_compo)
+      )
+    }
+  )
+
+  y <- do.call(rbind, y)
+  label(y$id) <- "Gene Ontology term ID"
+  label(y$cat) <- "Gene Ontology name"
+  label(y$short_desc) <- "Gene Ontology short term description"
+  label(y$size) <- "Number of Genes in GO and background"
+  label(y$count) <- "Number of DE Genes in GO and background"
+  label(y$gene_ratio) <- "Count / Size"
+  y
+}
+
+# <https://github.com/JEFworks/liger/blob/master/vignettes/gsea.pdf>
+gsea_wrapper <- function(df,
+                         gs = gs,
+                         gi = gene_info) {
+
+  message("names of first gs: ", names(head(gs)))
+
+  # Need the Entrez gene id
+  gi <- gi[!is.na(gi$entrezgene_id), ]
+
+  assertthat::assert_that(is(df, "data.frame"))
+  message(unique(df$ctrs))
+
+  res <- list()
+  res$lfc <- merge(df, gi, by.x = "feature", by.y = "ensembl_gene_id")
+
+  message("dim res$df: ", paste(dim(df), collapse = " x "))
+  assertthat::assert_that(
+    all(!is.na(res$entrezgene_id)),
+    all(table(res$entrezgene_id) == 1L)
+  )
+
+  gs <- list_genesets(gsets = gs, universe = res$lfc$entrezgene_id)
+  gc(reset = TRUE)
+  message("Number of genesets: ", length(gs))
+
+  res$gsea <- besd_gsea_analysis(
+    lfc = res$lfc$log2FoldChange,
+    nm = res$lfc$entrezgene_id,
+    gset = gs
+  )
+  gc(reset = TRUE)
+
+  res$gsea <- cbind(
+    res$gsea,
+    data.frame(
+      padj = p.adjust(res$gsea$p.val, method = "BH"),
+      regulation = ifelse(
+        res$gsea$edge.value > 0,
+        yes = "up-regulated",
+        no = "down-regulated"
+      ),
+      representation =  ifelse(
+        res$gsea$edge.score * res$gsea$edge.value > 0,
+        yes = "enrichment",
+        no = "depletion"
+      )
+    ),
+    describe_go(id = res$gsea$gset, de_bg = res$lfc)
+  )
+
+  res
+}
+```
+
+### GSEA/Intervention Induced DE by Diabetes Group
+
+```{r}
+out_file <- "../data/dta_13_01.RData"
+```
+
+```{r, eval=Negate(file.exists)(out_file)}
+result <- "../tlg/graph/fig_07_11.xlsx" |>
+  openxlsx::read.xlsx(sheet = "fig_07_11", startRow = 2, rowNames = TRUE) |>
+  (\(df) split(df, f = df["ctrs"]))() |>
+  lapply(gs = gsets, gsea_wrapper)
+
+save(result, file = out_file)
+```
+
+```{r, eval=file.exists(out_file)}
+load(out_file, verbose = TRUE)
+```
+
+```{r}
+result |>
+  lapply(\(x) head(x$gsea))
+result |>
+  lapply(\(x) dim(x$gsea))
+```
+
+```{r, f13_01_cfg}
+contrast <- "chg NGT"
+de_name <- " following Intervention"
+```
+
+```{r, soapy}
+dta <- result[[contrast]]$gsea |>
+  within({
+    term <- short_desc
+    short_desc <- desc_abbreviate(short_desc)
+    short_desc <- factor(short_desc, unique(short_desc[order(gene_ratio)]))
+  })
+
+dta_sel <- dta |>
+  subset(representation == "enrichment") |>
+  (\(df) {
+    df <- if (sum(df$padj < 0.05 & df$gene_ratio > 0.2) < 5) {
+      df <- y[order(df$padj), ]
+      df[seq_len(min(c(nrow(df), 5))), ]
+    } else {
+      df[df$padj < 0.05 & df$gene_ratio > 0.2, ]
+    }
+  }) ()
+
+library(ggplot2)
+gg <- ggplot(
+  dta_sel,
+  aes_string(
+    x = "gene_ratio",
+    color = "padj",
+    y = "short_desc",
+    size = "count",
+    shape = "regulation"
+  )
+) +
+  geom_point() +
+  scale_colour_gradient(low = "black", high = "gray80") +
+  scale_size(breaks = c(10, 50, 100, 500, 1000)) +
+  scale_shape_manual(values = c(1, 19)) +
+  guides(
+    colour = guide_colourbar(title = "P.adj:"),
+    shape = guide_legend(title = "Regulation: "),
+    size = guide_legend(title = "Count: ")
+  ) +
+  coord_cartesian(clip = "off") +
+  facet_grid(cat ~ ., scales = "free", space = "free") +
+  labs(title = paste0("[mRNA] ", contrast, de_name)) +
+  xlab("Gene Ratio") +
+  ylab("Gene Ratio") +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_blank(),
+    legend.position = "right",
+    legend.box = "vertical",
+    legend.text = element_text(size = 8, hjust = 0),
+    legend.box.just = "left",
+    panel.border = element_rect(fill = NA),
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r, f13_01_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.1",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed after exercise intervention in NGT group ",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_01.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_01_af.pdf")
+)
+export_xl(
+  fig_13_01 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_01"
+)
+```
+
+```{r, f13_01_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_01_cln}
+rm(gg, p, dta, dta_sel, contrast, de_name)
+```
+
+```{r, f13_02_cfg}
+contrast <- "chg T2D"
+de_name <- " following Intervention"
+```
+
+```{r, soapy}
+```
+
+```{r, f13_02_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.2",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed after exercise intervention in T2D group ",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_02.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_02_af.pdf")
+)
+export_xl(
+  fig_13_02 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_02"
+)
+```
+
+```{r, f13_02_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_02_cln}
+rm(gg, p, dta, dta_sel, contrast, de_name)
+```
+
+### GSEA/DE between Diabetes Group at Baseline
+
+```{r}
+out_file <- "../data/dta_13_04.RData"
+```
+
+```{r, eval=Negate(file.exists)(out_file)}
+# disregard the contrast IGT vs NGT because of the very low level of
+# differential expression.
+result <- "../tlg/graph/fig_07_03.xlsx" |>
+  openxlsx::read.xlsx(sheet = "fig_07_03", startRow = 2, rowNames = TRUE) |>
+  subset(ctrs %in% c("T2D vs IGT", "T2D vs NGT")) |>
+  (\(df) split(df, f = df["ctrs"]))() |>
+  lapply(gs = gsets, gsea_wrapper)
+
+save(result, file = out_file)
+```
+
+```{r, eval=file.exists(out_file)}
+load(out_file, verbose = TRUE)
+```
+
+```{r}
+result |>
+  lapply(\(x) head(x$gsea))
+result |>
+  lapply(\(x) dim(x$gsea))
+```
+
+```{r, f13_04_cfg}
+contrast <- "T2D vs NGT"
+de_name <- " at Baseline"
+```
+
+```{r, soapy}
+```
+
+```{r, f13_04_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.4",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed in T2D group compared to NGT group at Baseline",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_04.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_04_af.pdf")
+)
+export_xl(
+  fig_13_04 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_04"
+)
+```
+
+```{r, f13_04_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_04_cln}
+rm(gg, p, dta, dta_sel, contrast, de_name)
+```
+
+### GSEA/DE between Diabetes Group at Month 3
+
+```{r}
+out_file <- "../data/dta_13_03.RData"
+```
+
+```{r, eval=Negate(file.exists)(out_file)}
+# disregard the contrast IGT vs NGT because of the very low level of
+# differential expression.
+result <- "../tlg/graph/fig_07_07.xlsx" |>
+  openxlsx::read.xlsx(sheet = "fig_07_07", startRow = 2, rowNames = TRUE) |>
+  subset(ctrs %in% c("T2D vs IGT", "T2D vs NGT")) |>
+  (\(df) split(df, f = df["ctrs"]))() |>
+  lapply(gs = gsets, gsea_wrapper)
+
+save(result, file = out_file)
+export_xl(
+  fig_07_03 = dds_2_est,
+  info = c(
+    title =
+      "mRNA at baseline - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_03"
+)
+```
+
+```{r, eval=file.exists(out_file)}
+load(out_file, verbose = TRUE)
+```
+
+```{r}
+result |>
+  lapply(\(x) head(x$gsea))
+result |>
+  lapply(\(x) dim(x$gsea))
+```
+
+```{r, soapy_m3_t2dvsngt}
+contrast <- "T2D vs NGT"
+de_name <- "After Intervention"
+```
+
+```{r, soapy}
+```
+
+```{r, f13_03_annot}
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 13.3",
+      strwrap(
+        "Bubble plot - Gene ontology genesets enriched with gene differentially
+        expressed in T2D group compared to NGT group at baseline",
+        width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(gg, height = inches(5), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_13_gea / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_13_03.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_13_03_af.pdf")
+)
+export_xl(
+  fig_13_03 = dta,
+  info = c(
+    title = paste("Geneset enrichment analysis", contrast, de_name),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_13_03"
+)
+```
+
+```{r, f13_03_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f13_03_cln}
+rm(gg, p, dta, dta_sel, contrast, de_name)
+```
+
+## Session Informations
+
+```{r}
+sessioninfo::session_info()
+```

@@ -13,26 +13,26 @@ always_allow_html: true
 cfg_prog <- yaml::read_yaml("_prog.yml")
 ```
 
-The variation in messenger RNA (mRNA) and micro-RNA (miRNA) abundance measured
-by RNA-Seq associated
-either with the dysglycemia and/or the 3-month exercise intervention were
-investigated by a Differential Expression analysis (DE). At baseline,
-the DE model included only the effect of the dysglycemia-constrast group,
-consistently with the Anova model applied for demographics and baseline
-anthropometrics.
-To do so, genetic features which were never found expressed were discarded.
-Then RNA-Seq libraries were included if reaching a
-read depth threshold (total number of reads per sample) fixed by visual
-examination of the association between sample gene diversity and sample depth.
-For the remaining libraries, genetic features were included if the count per
-million reads (CPM) was greater than `r cfg_prog$rna$cpm_threshold$allmirna`
-in at least `r cfg_prog$rna$cpm_threshold$fraccol * 100`% of the samples. 
+The variation in messenger RNA (mRNA) and micro-RNA (miRNA) abundance
+measured by RNA-Seq associated either with the dysglycemia and/or the
+3-month exercise intervention were investigated by a Differential
+Expression analysis (DE). At baseline, the DE models included only the
+effect of the dysglycemia-constrast group, consistently with the Anova
+model applied for demographics and baseline anthropometrics.
+To do so, genetic features which were never found expressed were
+discarded. Then RNA-Seq libraries were included if reaching a read depth
+threshold (total number of reads per sample) fixed by visual examination
+of the association between sample gene diversity and sample depth. For
+the remaining libraries, genetic features were included if the count per
+million reads (CPM) was greater than
+`r cfg_prog$rna$cpm_threshold$allmirna` in at least
+`r cfg_prog$rna$cpm_threshold$fraccol * 100`% of the samples.
 The DE analysis implementation proposed by @Love2014 with the R package
 `DESeq2` was used to fit the models; it is based on a negative binomial
-distribution accounting for read variability, dispersion corrected after trends
-seen across all samples and genes [@Duendar2018].
-In addition, the number of tested genes being high, raw p.values were
-therefore adjusted according to Benjamini and Hochberg's method also called
+distribution accounting for read variability, dispersion corrected after
+trends seen across all samples and genes [@Duendar2018]. In addition,
+the number of tested genes being high, raw p.values were adjusted
+according to Benjamini and Hochberg's method also known as
 False-Discovery Rate (FDR).
 
 The analysis was realized with R [v4.2.0, @RCT2022]. Note the
@@ -49,6 +49,11 @@ variance stabilizing transformation [version 1.36.0, @Love2014]
 Target:
 
 - [x] miRNA DE at baseline without confounding factors.
+- [x] mRNA DE at baseline without confounding factors.
+- [x] miRNA DE at month 3 without confounding factors.
+- [x] mRNA DE at month 3 without confounding factors.
+- [x] miRNA DE variation induced by the exercise intervention.
+- [x] mRNA DE variation induced by the exercise intervention.
 
 ```{r, settings}
 devtools::load_all("src/pkg/dbs.data")
@@ -59,6 +64,7 @@ library(assertthat)
 library(ggplot2)
 source("R/ngs.R")
 source("R/inches.R")
+source("R/export_xl.R")
 ```
 
 ### Materials and Methods
@@ -67,20 +73,20 @@ source("R/inches.R")
 
 ```{r}
 # Help for data pre-processing
-filter_for_depth <- function(mae, assay, depth_threshold) {
-  mae[, colSums(mae[[ngs_assay]]) > depth_threshold, ]
+filter_for_depth <- function(mae, assay, min_depth) {
+  mae[, colSums(mae[[ngs_assay]]) > min_depth, ]
 }
 
-filter_for_visit <- function(mae, visit) {
-  mae[, colData(mae)$avisit == visit, ]
+filter_for_coldata <- function(mae, col = "avisit", is) {
+  mae[, colData(mae)[[col]] %in% is, ]
 }
 
-filter_for_low_expr <- function(mae, assay, cpm_threshold,
+filter_for_low_expr <- function(mae, assay, min_cpm,
                                 frac_cols = cfg_prog$rna$cpm_threshold$fraccol
 ) {
   # Genes expressed at least cpm_threshold in frac_cols columns
   mae[
-    rowSums(cpm(mae[[assay]]) > cpm_threshold) >
+    rowSums(cpm(mae[[assay]]) > min_cpm) >
       ncol(mae[[assay]]) * frac_cols,
     ,
   ]
@@ -129,9 +135,9 @@ ads <- adlb |>
     df
   })()
 
+rm(adsl, advs, adlb)
 ads
 ```
-
 
 ```{r, rna}
 rna <- list(
@@ -191,6 +197,7 @@ besd_mae <- MultiAssayExperiment(
   sampleMap = listToMap(lapply(rna, map_arrays))
 )
 
+rm(rna, ads)
 besd_mae
 ```
 
@@ -206,9 +213,16 @@ fixed at
 although with a less important but still substantial drop in gene variety
 below that threshold.
 
-::: {.panel-tabset}
+### miRNA
 
-```{r, depth_diversity_gg, eval=FALSE, echo=FALSE}
+```{r, depth_diversity_mirna}
+assay <- "allmirna"
+```
+
+::: panel-tabset
+#### Static figure
+
+```{r, depth_diversity_gg, eval=cfg_prog$knitr$results!="hide"}
 vline <- cfg_prog$rna$depth_threshold[[assay]]
 dtaplot <- assays(besd_mae)[[assay]]
 dtaplot <- data.frame(
@@ -232,37 +246,24 @@ gg <- ggplot(
   coord_cartesian(ylim = c(0, NA)) +
   theme_minimal() +
   theme(legend.position = "top")
-```
 
-```{r, depth_diversity_plotly, eval=FALSE, echo=FALSE}
-plotly::ggplotly(gg)
-```
-
-
-### miRNA
-
-::: {.panel-tabset}
-
-#### Static figure
-
-```{r, depth_diversity_mirna}
-assay <- "allmirna"
-```
-
-```{r, depth_diversity_gg, eval=cfg_prog$knitr$results!="hide"}
+gg
 ```
 
 #### Interactive figure
 
 ```{r, depth_diversity_plotly, eval=cfg_prog$knitr$results!="hide"}
+plotly::ggplotly(gg)
 ```
-
 :::
+
+```{r}
+rm(vline, dtaplot, assay, gg)
+```
 
 ### mRNA
 
-::: {.panel-tabset}
-
+::: panel-tabset
 #### Static figure
 
 ```{r, depth_diversity_mrna}
@@ -276,7 +277,6 @@ assay <- "mrna"
 
 ```{r, depth_diversity_plotly, eval=cfg_prog$knitr$results!="hide"}
 ```
-
 :::
 
 :::
@@ -289,9 +289,16 @@ ngs_assay <- "allmirna"
 
 dds_1_fit <- besd_mae |>
   (\(mae) mae[ , , ngs_assay])() |>
-  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
-  filter_for_visit("Baseline") |>
-  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  filter_for_depth(
+    assay = ngs_assay,
+    min_depth = ctrl$depth_threshold[[ngs_assay]]
+  ) |>
+  filter_for_coldata(col = "avisit", is = "Baseline") |>
+  filter_for_low_expr(
+    assay = ngs_assay,
+    min_cpm = ctrl$cpm_threshold[[ngs_assay]],
+    frac_cols = ctrl$cpm_threshold$fraccol
+  ) |>
   (\(mae) DESeq2::DESeqDataSetFromMatrix(
     countData = mae[[ngs_assay]],
     colData = colData(x = mae),
@@ -304,10 +311,8 @@ dds_1_fit <- besd_mae |>
   )
 ```
 
-
 ```{r, dds_1_est}
-dds_1_est <-
-  dds_1_fit |>
+dds_1_est <- dds_1_fit |>
   de_by_ctrs(
     ctrs = list(
       c("diabcd", test = "T2D", ref = "NGT"),
@@ -315,7 +320,14 @@ dds_1_est <-
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
+
 ```
 
 ### Fig 07 01
@@ -386,6 +398,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_01_xlsx}
+export_xl(
+  fig_07_01 = dds_1_est,
+  info = c(
+    title =
+      "miRNA at baseline - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_01"
+)
+```
 
 ### Fig 07 02
 
@@ -476,6 +500,12 @@ export_as(
 show_slate(p)
 ```
 
+```{r, clean_dds_1}
+rm(ctrl, ngs_assay, dds_1_fit, pval, log_adj, brk, dds_1_gg, p)
+gc()
+ls()
+```
+
 ## `dds_2` - DE: Baseline, mRNA
 
 ```{r, dds_2_dta}
@@ -484,9 +514,15 @@ ngs_assay <- "mrna"
 
 dds_2_fit <- besd_mae |>
   (\(mae) mae[ , , ngs_assay])() |>
-  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
-  filter_for_visit("Baseline") |>
-  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  filter_for_depth(
+    assay = ngs_assay,
+    min_depth = ctrl$depth_threshold[[ngs_assay]]
+  ) |>
+  filter_for_coldata(col = "avisit", is = "Baseline") |>
+  filter_for_low_expr(
+    assay = ngs_assay,
+    min_cpm = ctrl$cpm_threshold[[ngs_assay]]
+  ) |>
   (\(mae) DESeq2::DESeqDataSetFromMatrix(
     countData = mae[[ngs_assay]],
     colData = colData(x = mae),
@@ -499,8 +535,7 @@ dds_2_fit <- besd_mae |>
 ```
 
 ```{r, dds_2_est}
-dds_2_est <-
-  dds_2_fit |>
+dds_2_est <- dds_2_fit |>
   de_by_ctrs(
     ctrs = list(
       c("diabcd", test = "T2D", ref = "NGT"),
@@ -508,7 +543,57 @@ dds_2_est <-
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
+```
+
+```{r, eval=FALSE}
+head(dds_2_est)
+
+
+ndegenes <- dds_2_est |>
+  subset(round(padj, 5) < 0.001) |>
+  with(unique(feature)) |>
+  length()
+
+
+sprintf("%.2f", round(ndegenes / ngenes * 100, 2))
+
+split(dds_2_est, dds_2_est$ctrs) |>
+  lapply(\(x) {
+    dim(x)
+    head(x)
+    table(cut(x$padj, breaks = c(0, 0.001, 0.05, 1)))
+  })
+
+
+
+pct_de_genes <- sprintf("%.2f", round(ndegenes / ngenes * 100, 2))
+
+
+genes_nsub <- nrow(besd_mae[[ngs_assay]])
+genes_de_n <- c(
+  Overall = dds_2_est |>
+      subset(round(padj, 5) < 0.001) |>
+      with(unique(feature)) |>
+      length()
+  ,
+  split(dds_2_est, dds_2_est$ctrs) |>
+    sapply(\(x) {
+      x <- subset(x, round(padj, 5) < 0.001)
+      length(unique(x$feature))
+    })
+)
+
+genes_nsub
+genes_de_n
+genes_de_pct <- sprintf("%.2f", genes_de_n / genes_nsub * 100)
+
 ```
 
 ### Fig 07 03
@@ -551,7 +636,7 @@ p <- clean_slate() |>
       "Figure 7.3",
       strwrap(
         "Volcano plot - Response Size and Significance of Differential
-        Expression among all miRNA at Baseline", width = 80
+        Expression among mRNA at Baseline", width = 80
       ),
       "Analysis Set: Full Analysis Set"
     )
@@ -580,6 +665,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_03_xlsx}
+export_xl(
+  fig_07_03 = dds_2_est,
+  info = c(
+    title =
+      "mRNA at baseline - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_03"
+)
+```
 
 ### Fig 07 04
 
@@ -664,7 +761,6 @@ export_as(
 show_slate(p)
 ```
 
-
 ## `dds_3` - DE: Month 3, all micro RNA
 
 ```{r, dds_3_dta}
@@ -673,9 +769,15 @@ ngs_assay <- "allmirna"
 
 dds_3_fit <- besd_mae |>
   (\(mae) mae[ , , ngs_assay])() |>
-  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
-  filter_for_visit("Month 3") |>
-  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  filter_for_depth(
+    assay = ngs_assay,
+    min_depth = ctrl$depth_threshold[[ngs_assay]]
+  ) |>
+  filter_for_coldata(col = "avisit", is = "Month 3") |>
+  filter_for_low_expr(
+    assay = ngs_assay,
+    min_cpm = ctrl$cpm_threshold[[ngs_assay]]
+  ) |>
   (\(mae) DESeq2::DESeqDataSetFromMatrix(
     countData = mae[[ngs_assay]],
     colData = colData(x = mae),
@@ -688,7 +790,6 @@ dds_3_fit <- besd_mae |>
   )
 ```
 
-
 ```{r, dds_3_est}
 dds_3_est <-
   dds_3_fit |>
@@ -699,7 +800,13 @@ dds_3_est <-
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
 ```
 
 ### Fig 07 05
@@ -766,6 +873,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_05_xlsx}
+export_xl(
+  fig_07_05 = dds_3_est,
+  info = c(
+    title =
+      "All miRNA at month 3 - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_05"
+)
+```
 
 ### Fig 07 06
 
@@ -864,9 +983,15 @@ ngs_assay <- "mrna"
 
 dds_4_fit <- besd_mae |>
   (\(mae) mae[ , , ngs_assay])() |>
-  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
-  filter_for_visit("Month 3") |>
-  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  filter_for_depth(
+    assay = ngs_assay,
+    min_depth = ctrl$depth_threshold[[ngs_assay]]
+  ) |>
+  filter_for_coldata(col = "avisit", is = "Month 3") |>
+  filter_for_low_expr(
+    assay = ngs_assay,
+    min_cpm = ctrl$cpm_threshold[[ngs_assay]]
+  ) |>
   (\(mae) DESeq2::DESeqDataSetFromMatrix(
     countData = mae[[ngs_assay]],
     colData = colData(x = mae),
@@ -888,7 +1013,13 @@ dds_4_est <-
       c("diabcd", test = "IGT", ref = "NGT")
     )
   ) |>
-  Reduce(rbind, x = _)
+  Reduce(rbind, x = _) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
 ```
 
 ### Fig 07 07
@@ -901,8 +1032,13 @@ brk <- setNames(
   c(log_adj, paste0("padj=", pval))
 )
 
-dds_4_gg <-
-  dds_4_est |>
+dds_4_gg <- dds_4_est |>
+  # All pval close to 1 disturbe the hex-density plots
+  (\(df) {
+    assert_that(all(df$padj[df$ctrs == "IGT vs NGT"] > 0.991))
+    df
+  })() |>
+  subset(ctrs != "IGT vs NGT") |>
   ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
   geom_vline(xintercept = c(-1, 1), lty = 2) +
   xlab("Log2-fold-change") +
@@ -935,6 +1071,11 @@ p <- clean_slate() |>
     )
   ) |>
   add_figure(dds_4_gg, height = inches(3), width = inches(6)) |>
+  add_note(c(
+    "NOTE: all feature comparisons between IGT and NGT were characterised by
+    adjusted p.values greater than 0.99; to preserve the hexagonal-density
+    plot, this comparison was not represented."
+  )) |>
   add_footer(
     c(
       "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
@@ -956,6 +1097,18 @@ export_as(
 show_slate(p)
 ```
 
+```{r, f07_07_xlsx}
+export_xl(
+  fig_07_07 = dds_4_est,
+  info = c(
+    title =
+      "mRNA at month 3 - differential expression by diabetes group",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_07"
+)
+```
 
 ### Fig 07 08
 
@@ -970,7 +1123,14 @@ brk <- setNames(
   c(log_adj, paste0("padj=", pval))
 )
 
-dds_4_gg <- ggplot(dds_4_est, mapping = aes(x = log2FoldChange, y = log_padj)) +
+dds_4_gg <- dds_4_est |>
+  # All pval close to 1 disturbe the hex-density plots
+  (\(df) {
+    assert_that(all(df$padj[df$ctrs == "IGT vs NGT"] > 0.991))
+    df
+  })() |>
+  subset(ctrs != "IGT vs NGT") |>
+  ggplot(mapping = aes(x = log2FoldChange, y = log_padj)) +
   geom_vline(xintercept = c(-1, 1), lty = 2) +
   xlab("Log2-fold-change") +
   ylab(expression(-1 %*% log10(padj))) +
@@ -1018,6 +1178,11 @@ p <- clean_slate() |>
     )
   ) |>
   add_figure(dds_4_gg, height = inches(3), width = inches(6)) |>
+  add_note(c(
+    "NOTE: all feature comparisons between IGT and NGT were characterised by
+    adjusted p.values greater than 0.99; to preserve the hexagonal-density
+    plot, this comparison was not represented."
+  )) |>
   add_footer(
     c(
       "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
@@ -1040,6 +1205,565 @@ export_as(
 show_slate(p)
 ```
 
+## `dds_5` - DE: Exercise intervention, all micro RNA
+
+```{r, dds_5_dta}
+ctrl <- cfg_prog$rna
+ngs_assay <- "allmirna"
+
+filter_for_paired_visits <- function(mae) {
+  assert_that(all(table(colData(mae)$subjid) <= 2))
+  
+  subj <- table(colData(mae)$subjid)
+  subj <- names(subj[subj == 2])
+  mae <- mae[, colData(mae)$subjid %in% subj, ]
+  
+  chk_df <- as.data.frame(colData(mae))
+  check <- split(chk_df, f = chk_df$avisit)
+  
+  # Verify the selection:
+  assert_that(all(
+    sapply(check, subj = subj,\(x, subj) all(subj %in% x$subjid))
+  ))
+  mae
+}
+
+dds_5_fit <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_paired_visits() |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) {
+    # <https://support.bioconductor.org/p/84241/#84296>
+    # Or:
+    # vignette('DESeq2'),
+    # > Section: "Group-specific condition effects, individuals nested
+    # > within groups"
+    colData(mae) <- droplevels(colData(mae))
+    colData(mae)$subjid <- as.character(colData(mae)$subjid)
+    colData(mae)$avisit_ <- factor(
+      colData(mae)$avisit,
+      levels = levels(colData(mae)$avisit),
+      labels = sub(" ", "_", levels(colData(mae)$avisit))
+    )
+    coldata <- colData(mae)[c("diabcd", "subjid", "avisit_")]
+    
+    coldata <- do.call(
+      rbind,
+      by(
+        data = coldata,
+        INDICES = list(coldata$diabcd),
+        FUN = function(x) {
+          subjid <- as.factor(x$subjid)# nolint
+          x$P.n <- factor(# nolint
+            subjid,
+            levels = levels(subjid),
+            labels = paste0("P.", 1:nlevels(subjid))
+          )
+          x[order(x$subjid, x$diabcd), ]
+        }
+      )
+    )
+    
+    coldata <- coldata[rownames(colData(mae)), ]
+    dsgn <- stats::model.matrix(
+      ~diabcd + diabcd:P.n + diabcd:avisit_,
+      coldata
+    )
+    dsgn <- dsgn[, colSums(dsgn) != 0]
+    
+    DESeq2::DESeqDataSetFromMatrix(
+      countData = mae[[ngs_assay]],
+      colData = colData(x = mae),
+      design = dsgn
+    )
+  })() |>
+  DESeq2::DESeq(
+    parallel = TRUE,
+    BPPARAM = BiocParallel::bpparam(),
+    fitType = "local",
+    betaPrior = FALSE
+  )
+
+de_by_name <- function(df,
+                       name,
+                       adj_meth = ctrl$adj_meth) {
+  lapply(
+    name,
+    fit = df,
+    adj_meth = adj_meth,
+    FUN = function(x, fit, adj_meth) {
+      y <- DESeq2::results(fit, name = x, pAdjustMethod = adj_meth)
+      y$feature <- rownames(y)
+      y$log_padj <- -1 * log10(y$padj)
+      y$ctrs <- gsub(
+        pattern = "^diabcd(...)\\.avisit.*$",
+        x = x,
+        replacement = "chg \\1"
+      )
+      as.data.frame(y)
+    }
+  )
+}
+
+dds_5_est <-
+  dds_5_fit |>
+  de_by_name(
+    name = c(
+      chg_ngt = "diabcdNGT.avisit_Month_3",
+      chg_igt = "diabcdIGT.avisit_Month_3",
+      chg_t2d = "diabcdT2D.avisit_Month_3"
+    )
+  ) |>
+  Reduce(rbind, x = _) |>
+  within(
+    ctrs <- factor(ctrs, levels = paste("chg", c("NGT", "IGT", "T2D")))
+  ) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
+```
+
+### Fig 07 09
+
+```{r, f07_09}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_5_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_5_gg <-
+  dds_5_est |>
+  ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_y_continuous(breaks = brk) +
+  facet_grid(. ~ ctrs) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(3, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.9",
+      strwrap(
+        "Volcano plot - Size and Significance of Differential
+        Expression among micro RNA in response to the exercise
+        intervention (CHG)", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_5_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_09.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_09_af.pdf")
+)
+```
+
+```{r, f07_09_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f07_09_xlsx}
+export_xl(
+  fig_07_09 = dds_5_est,
+  info = c(
+    title = paste(
+      "All miRNA Change from Baseline - differential expression by diabetes",
+      "group"
+    ),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_09"
+)
+```
+
+### Fig 07 10
+
+```{r, f07_10}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_5_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_5_est$label <- gsub(
+  "hsa-(mir|miR|let)-",
+  dds_5_est$feature,
+  replacement = ""
+)
+dds_5_est$type <- substr(dds_5_est$feature, start = 5, stop = 7)
+head(dds_5_est)
+
+dds_5_txt <- subset(dds_5_est, padj < 0.05 & abs(log2FoldChange) > .5)
+
+dds_5_gg <- ggplot(
+  dds_5_est,
+  mapping = aes(x = log2FoldChange, y = log_padj, col = type)
+) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex(mapping = aes(fill = log10(..count..)), color = "transparent") +
+  geom_point(data = dds_5_txt, size = 1, shape = 3) +
+  geom_text(
+    data = dds_5_txt,
+    aes(label = label),
+    vjust = -0.5,
+    size = 2,
+    show.legend = FALSE
+  ) +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_color_manual(values = c("#FF5003", "#003F7D")) +
+  scale_y_continuous(breaks = brk) +
+  facet_wrap(. ~ ctrs, ncol = 3) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(2, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.10",
+      strwrap(
+        "Volcano plot - Size and Significance of Differential
+        Expression among micro RNA in response to the exercise
+        intervention (CHG)", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_5_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_10.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_10_af.pdf")
+)
+```
+
+```{r, f07_10_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+## `dds_6` - DE: Exercise intervention, mRNA
+
+```{r, dds_6_dta}
+ctrl <- cfg_prog$rna
+ngs_assay <- "mrna"
+
+filter_for_paired_visits <- function(mae) {
+  assert_that(all(table(colData(mae)$subjid) <= 2))
+  
+  subj <- table(colData(mae)$subjid)
+  subj <- names(subj[subj == 2])
+  mae <- mae[, colData(mae)$subjid %in% subj, ]
+  
+  chk_df <- as.data.frame(colData(mae))
+  check <- split(chk_df, f = chk_df$avisit)
+  
+  # Verify the selection:
+  assert_that(all(
+    sapply(check, subj = subj,\(x, subj) all(subj %in% x$subjid))
+  ))
+  mae
+}
+
+dds_6_fit <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_paired_visits() |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) {
+    # <https://support.bioconductor.org/p/84241/#84296>
+    # Or:
+    # vignette('DESeq2'),
+    # > Section: "Group-specific condition effects, individuals nested
+    # > within groups"
+    colData(mae) <- droplevels(colData(mae))
+    colData(mae)$subjid <- as.character(colData(mae)$subjid)
+    colData(mae)$avisit_ <- factor(
+      colData(mae)$avisit,
+      levels = levels(colData(mae)$avisit),
+      labels = sub(" ", "_", levels(colData(mae)$avisit))
+    )
+    coldata <- colData(mae)[c("diabcd", "subjid", "avisit_")]
+    
+    coldata <- do.call(
+      rbind,
+      by(
+        data = coldata,
+        INDICES = list(coldata$diabcd),
+        FUN = function(x) {
+          subjid <- as.factor(x$subjid)# nolint
+          x$P.n <- factor(# nolint
+            subjid,
+            levels = levels(subjid),
+            labels = paste0("P.", 1:nlevels(subjid))
+          )
+          x[order(x$subjid, x$diabcd), ]
+        }
+      )
+    )
+    
+    coldata <- coldata[rownames(colData(mae)), ]
+    dsgn <- stats::model.matrix(
+      ~diabcd + diabcd:P.n + diabcd:avisit_,
+      coldata
+    )
+    dsgn <- dsgn[, colSums(dsgn) != 0]
+    
+    DESeq2::DESeqDataSetFromMatrix(
+      countData = mae[[ngs_assay]],
+      colData = colData(x = mae),
+      design = dsgn
+    )
+  })() |>
+  DESeq2::DESeq(
+    parallel = TRUE,
+    BPPARAM = BiocParallel::bpparam(),
+    fitType = "local",
+    betaPrior = FALSE
+  )
+
+dds_6_est <-
+  dds_6_fit |>
+  de_by_name(
+    name = c(
+      chg_ngt = "diabcdNGT.avisit_Month_3",
+      chg_igt = "diabcdIGT.avisit_Month_3",
+      chg_t2d = "diabcdT2D.avisit_Month_3"
+    )
+  ) |>
+  Reduce(rbind, x = _) |>
+  within(
+    ctrs <- factor(ctrs, levels = paste("chg", c("NGT", "IGT", "T2D")))
+  ) |>
+  within({
+    label_xp(lfcSE) <- "Log Fold Change Standard Error"
+    label_xp(ctrs) <- "Contrast"
+    label_xp(padj) <- "Adjusted p.value (False-Discovery Rate)"
+    label_xp(log_padj) <- "-1 * log10(padj)"
+  })
+```
+
+### Fig 07 11
+
+```{r, f07_11}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_6_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_6_gg <-
+  dds_6_est |>
+  ggplot(aes(log2FoldChange, log_padj, fill = log10(..count..))) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex() +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_y_continuous(breaks = brk) +
+  facet_grid(. ~ ctrs) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(3, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.11",
+      strwrap(
+        "Volcano plot - Size and Significance of Differential
+        Expression among mRNA in response to the exercise
+        intervention (CHG)", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_6_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_11.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_11_af.pdf")
+)
+```
+
+```{r, f07_11_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, f07_11_xlsx}
+export_xl(
+  fig_07_11 = dds_6_est,
+  info = c(
+    title = paste(
+      "mRNA Change from Baseline - differential expression by diabetes",
+      "group"
+    ),
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = "fig_07_11"
+)
+```
+
+### Fig 07 12
+
+```{r, f07_12}
+pval <- c(0.05, 0.001)
+log_adj <- pretty(dds_6_est$log_padj)
+brk <- setNames(
+  c(log_adj, -1 * log10(pval)),
+  c(log_adj, paste0("padj=", pval))
+)
+
+dds_6_est$label <- gsub("ENSG0+", "", dds_6_est$feature)
+dds_6_est$type <- substr(dds_6_est$feature, start = 5, stop = 7)
+
+dds_6_txt <- subset(dds_6_est, padj < 0.05 & abs(log2FoldChange) > 1)
+
+dds_6_gg <- ggplot(
+  dds_6_est,
+  mapping = aes(x = log2FoldChange, y = log_padj, col = type)
+) +
+  geom_vline(xintercept = c(-1, 1), lty = 2) +
+  xlab("Log2-fold-change") +
+  ylab(expression(-1 %*% log10(padj))) +
+  stat_bin_hex(mapping = aes(fill = log10(..count..)), color = "transparent") +
+  geom_point(data = dds_6_txt, size = 1, shape = 3) +
+  geom_text(
+    data = dds_6_txt,
+    aes(label = label),
+    vjust = -0.5,
+    size = 2,
+    show.legend = FALSE
+  ) +
+  scale_fill_gradient(low = "black", high = "gray90") +
+  scale_color_manual(values = c("#FF5003", "#003F7D")) +
+  scale_y_continuous(breaks = brk) +
+  facet_wrap(. ~ ctrs, ncol = 3) +
+  coord_cartesian(clip = "off") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 7),
+    title =  element_text(size = 7),
+    legend.position = "bottom",
+    legend.key.height = unit(.5, "lines"),
+    legend.key.width = unit(2, "lines"),
+    legend.text.align = 0,
+    panel.grid.minor = element_blank()
+  )
+
+p <- clean_slate() |>
+  add_header(c("FCA Collin", "UMB BESD"), c("Confidential", "Draft")) |>
+  add_title(
+    c(
+      "Figure 7.12",
+      strwrap(
+        "Volcano plot - Size and Significance of Differential
+        Expression among mRNA in response to the exercise
+        intervention (CHG)", width = 80
+      ),
+      "Analysis Set: Full Analysis Set"
+    )
+  ) |>
+  add_figure(dds_6_gg, height = inches(3), width = inches(6)) |>
+  add_footer(
+    c(
+      "Program t2d_07_mir / Env ayup_dbs:v0.1.0-alpha",
+      format(Sys.time(), format = "%Y-%m-%d %H:%M (%Z)")
+    ),
+    cfg_prog$version
+  )
+
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, "fig_07_12.pdf"),
+  file_graph_alone = file.path(cfg_prog$paths$grh, "fig_07_12_af.pdf")
+)
+```
+
+```{r, f07_12_sh, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 8.3
+#| fig-height: 11.7
+show_slate(p)
+```
+
+```{r, clean_dds_6}
+rm(ctrl, ngs_assay, dds_6_fit, pval, log_adj, brk, dds_6_gg, p)
+gc()
+ls()
+```
 
 ## Session Informations
 
