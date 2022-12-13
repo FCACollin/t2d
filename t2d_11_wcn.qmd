@@ -3,11 +3,77 @@ title: "WGCNA"
 subtitle: Program 11
 author: "Francois Collin"
 date: "`r format(Sys.time(), '%Y-%m-%d')`"
+params:
+  basenm: t2d_11
 always_allow_html: true
 ---
 
 
-## mRNA Seq - WGCNA
+## mRNA Seq / miRNA - WGCNA
+
+> "_The Weighted Correlation Network Analysis (WGCNA) [11,12] corresponds to a
+> data reduction method and unsupervised classification method. It simplifies
+> the interpretation of thousands of gene responses to a dozen of synthetic
+> groups (or modules) of genes. The net establishes connections between
+> genes-genes are connected if their expression is correlated. Genes can be
+> more or less intensively connected depending on the value of the correlation
+> (the weights). The connectivity between genes is then interpreted into a
+> distance, and the distance is used to group genes into modules. This is how a
+> high number of genes can be reduced into a small number of clusters whose
+> expression is quantified by the Eigengenes (first principal component within
+> the module). It relies on the assumption that highly correlated genes within
+> a module are involved in common biological processes._" @Niemira2020
+
+Two gene co-expression networks were obtained, 1) the first one based on
+baseline samples for NGT and T2D subject samples and
+2) the second on training-induced expression variation independently from the
+study arm. In detail:
+
+1. baseline samples for NGT and T2D were selected, the same inclusion criteria 
+   as in the section "_Differential expression analysis_" were used.
+   Gene expression was transformed using variance
+   stabilizing transformation. The optimal soft-threshold adjacency matrix
+   was graphically determined, then the network was estimated resulting in
+   gene modules and corresponding Eigengenes. The `cutreeDynamic` algorithm
+   was used for tree pruning of the gene hierarchical clustering dendrogram
+   resulting in co-expression modules; correlated modules (r > 0.80) were
+   merged. The quantitative clinical parameters were centred to the average and
+   scaled-to-variance while factors were decomposed into dummy variables
+   so as to study the association between gene modules and clinical traits
+   quantified with Pearson's correlation coefficient. 
+2. training-induced variation was studied similarly, the approach above was
+   applicable here also, using the difference between variance-stabilizing
+   transformed expression matrix as input to the procedure.
+
+Note: it is not possible to use the differentially expressed genes as a
+starting point. The WGCNA method includes a disclaimer preventing the
+use of pre-filtered / selected genes based on DEG analysis result.
+
+The module identification was followed by gene set enrichment analysis. To do
+so, the correlation between gene expression (Variance-Stabilized Transformed
+values, VST) and the eigengene estimated in every module was used as a 
+measure of module membership. Then, for every module, genesets as defined
+by the Gene Ontology (GO) project were selected if at least 10 genes belonged
+to the module. Then, the GSEA procedure was run while considering
+all expressed genes with existing _entrez gene_ id and determining an
+enrichment score and associated p.value based on 10000 random permutations.
+The result focused specifically on enriched and up-regulated genesets, i.e.
+genesets with over representation of genes with higher
+correlation with the eigengene within each module.
+
+The analysis was realized with R [v4.2.0, @RCT2022]. Note the
+use of the additional packages downloaded from the RStudio package manager
+repository (freeze date 2022-05-04, [repos](
+https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
+
+- `MultiAssayExperiment` for management of multi-omics experiment objects
+  [version 1.22.0, @Ramos2017]
+- `DESeq2` for differential expression analysis and
+  variance stabilizing transformation [version 1.36.0, @Love2014]
+- `cowplot` for figure composition [version 1.1.1, @Wilke2020]
+- `ggplot2` for graphics [version 3.3.6, @Wickham2016]
+- `WGCNA` for gene clustering [version 1.71, @Langfelder2008, @Langfelder2012].
+
 
 ```{r, cfg_prog}
 cfg_prog <- yaml::read_yaml("_prog.yml")
@@ -21,16 +87,8 @@ knitr::opts_chunk$set(results = cfg_prog$knitr$results)
 
 source("R/ngs.R")
 source("R/inches.R")
+source("R/export_xl.R")
 ```
-
-
-The analysis was realized with R [v4.2.0, @RCT2022]. Note the
-use of the additional packages downloaded from the RStudio package manager
-repository (freeze date 2022-05-04, [repos](
-https://packagemanager.rstudio.com/all/2022-05-04+Y3JhbiwyOjQ1MjYyMTU7NTVFQjhGODU)):
-
-- `DESeq2` for differential expression analysis and
-  variance stabilizing transformation [version 1.36.0, @Love2014]
 
 ### Materials and Methods
 
@@ -44,6 +102,10 @@ filter_for_depth <- function(mae, assay, depth_threshold) {
 
 filter_for_visit <- function(mae, visit) {
   mae[, colData(mae)$avisit == visit, ]
+}
+
+filter_for_coldata <- function(mae, col, is) {
+  mae[, colData(mae)[[col]] %in% is, ]
 }
 
 filter_for_low_expr <- function(mae, assay, cpm_threshold,
@@ -76,13 +138,11 @@ ads <- adlb |>
   tidyr::pivot_wider(names_from = "paramcd", values_from = "aval") |>
   merge(adsl, y = _, by = "subjid") |>
   (\(df) S4Vectors::DataFrame(df, row.names = subjvis_to_spl(df)))() |>
-  subset(select = c(subjid, diabcd, diab, avisitn, avisit, GLU120)) |>
   (\(df) {
     assertthat::assert_that(all(table(subjvis_to_spl(df)) == 1))
     df
   })()
 
-ads
 ```
 
 ```{r, rna}
@@ -137,6 +197,7 @@ map_arrays <- function(x) {
   y
 }
 
+colnames(ads) <- tolower(colnames(ads))
 besd_mae <- MultiAssayExperiment(
   experiments = ExperimentList(rna),
   colData = ads,
@@ -146,16 +207,27 @@ besd_mae <- MultiAssayExperiment(
 besd_mae
 ```
 
-```{r, filter, eval=TRUE}
+
+### miRNA / Baseline
+
+```{r, mirna_settings, eval=TRUE}
 #' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
 #' # WGCNA: gene in rows, sample in cols
 
 ctrl <- cfg_prog$rna
 ngs_assay <- "allmirna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$allmirna
+
+# Specific to sample_clustering
+col_fill <- "glu120"
+```
+
+```{r, filter, eval=TRUE}
 dta <- besd_mae |>
   (\(mae) mae[ , , ngs_assay])() |>
   filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
-  filter_for_visit("Baseline") |>
+  filter_for_coldata("avisit", is = "Baseline") |>
+  filter_for_coldata("diabcd", is = c("NGT", "T2D")) |>
   filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
   (\(mae) {
     mae[[ngs_assay]] <-
@@ -169,19 +241,21 @@ dta <- besd_mae |>
     mae
   })()
 
-
 #' WGCNA Expression data.
 #'
 #' A matrix or data frame in which columns are genes and rows ar samples.
 #'
 dta_expr <- t(dta[[ngs_assay]])
 assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
+
+dta_traits <- colData(dta) |> droplevels()
 ```
 
-### Sample clustering
+
+#### Sample clustering (OID 1)
 
 ```{r, sample_clustering, eval=TRUE}
-spl_clust <- hclust(dist(dta_expr), method = "average")
+spl_clust <- hclust(dist(dta_expr), method = "complete")
 
 # Clustering Dendrogram of samples based on their Euclidean distance
 theme_custom <- function(...) {
@@ -196,6 +270,11 @@ theme_custom <- function(...) {
 library(ggdendro)
 library(ggplot2)
 dend <- spl_clust |> as.dendrogram()
+
+dta_traits$x <- rownames(dta_traits)
+dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
+dta_traits <- as.data.frame(dta_traits)
+
 lim <- c(0, nobs(dend))
 ddata <- ggdendro::dendro_data(dend, type = "rectangle")
 
@@ -210,11 +289,6 @@ p1 <- ggplot(ggdendro::segment(ddata)) +
     position = "top"
   ) +
   theme_custom(axis.text.y = element_text())
-
-dta_traits <- colData(dta)
-dta_traits$x <- rownames(dta_traits)
-dta_traits$x <- factor(dta_traits$x, levels = labels(dend))
-dta_traits <- as.data.frame(dta_traits)
 
 p2 <- ggplot(
   dta_traits,
@@ -236,7 +310,7 @@ p4 <- ggplot(
   aes(
     xmin = 0, xmax = 1,
     ymin = as.numeric(x) - 1/2, ymax = as.numeric(x) + 1/2,
-    fill = GLU120
+    fill = !!as.name(col_fill)
   )
 ) +
   geom_rect(col = "white") +
@@ -253,15 +327,35 @@ p <- egg::ggarrange(
   padding = unit(0, "lines"),
   draw = FALSE
 )
+
+```
+
+```{r}
+oid <- 1
+title <- "miRNA / Baseline - Clustering dendrogram of samples based on their
+  Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
 p <- clean_slate() |>
   add_title(c(
-    "Figure xxx",
-    wrap_long_lines(
-      "Clustering dendrogram of samples based on their Euclidean distance
-      and trait heatmap"
-    )
+    paste0("Figure 11.",   oid),
+    wrap_long_lines(title)
   )) |>
-  add_figure(p, height = inches(5))
+  add_figure(p, height = inches(5)) |>
+  add_note(c(
+    "Note: VST transformed expression matrix used to estimate distances
+    between samples, _complete_ method was used for the hierarchical
+    clustering."
+  ))
+
+oid <- stringr::str_pad(oid, 2, "left", "0")
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, ".pdf")),
+  file_graph_alone = 
+    file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, "_af.pdf"))
+)
 ```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
@@ -270,12 +364,15 @@ p <- clean_slate() |>
 show_slate(p)
 ```
 
-### Soft threshold determination
+#### Gene Clustering
 
-```{r}
+##### Soft threshold determination (OID 2)
+
+```{r, sft_determination}
 library(WGCNA)
 enableWGCNAThreads()
 
+pwr <- ctrl_wgcna$adjacency$power
 sft <- pickSoftThreshold(
   dta_expr,
   powerVector = c(c(1:10), seq(from = 12, to=20, by=2)),
@@ -283,33 +380,26 @@ sft <- pickSoftThreshold(
 )
 
 library(ggplot2)
-pwr <- cfg_prog$rna$wgcna$sft$allmirna
 p1 <- ggplot(
   sft$fitIndices,
-  aes(
-    Power,
-    - sign(slope) * SFT.R.sq,
-    label = Power,
-    shape = Power == pwr
-  )
+  aes(Power, - sign(slope) * SFT.R.sq, label = Power)
 ) +
   geom_hline(yintercept = .9, lty = 2) +
   geom_hline(yintercept = c(0, 1), lty = 1) +
   geom_line() +
-  geom_point(shape = 3) +
   geom_label(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     vjust = 0, nudge_y = .025
   ) +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = Power, yend = 0)
   ) +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = -Inf, yend = - sign(slope) * SFT.R.sq)
   ) +
-  geom_point(show.legend = FALSE, fill = "white") +
+  geom_point(aes(shape = Power == pwr), show.legend = FALSE, fill = "white") +
   scale_shape_manual(values = c("TRUE" = 21, "FALSE" = 3)) +
   coord_cartesian(ylim = c(0, 1)) +
   xlab("Soft Threshold (power)") +
@@ -324,15 +414,15 @@ p2 <- ggplot(
   geom_hline(yintercept = .9) +
   geom_line() +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = Power, yend = 0)
   ) +
   geom_segment(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     aes(xend = -Inf, yend = mean.k.)
   ) +
   geom_label(
-    data = sft$fitIndices |> subset(Power == 5),
+    data = sft$fitIndices |> subset(Power == pwr),
     vjust = 0, hjust = 0, nudge_y = 1
   ) +
   geom_point(fill = "white", show.legend = FALSE) +
@@ -344,15 +434,29 @@ p2 <- ggplot(
   theme(panel.grid.minor = element_blank())
 
 p <- egg::ggarrange(p1, p2, nrow = 1, draw = FALSE)
+```
+
+```{r}
+oid <- 2
+title <- "Micro-RNA / Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
 p <- clean_slate() |>
   add_title(c(
-    "Figure xxx",
-    "Soft threshold determination"
+    paste0("Figure 11.", oid),
+    title
   )) |>
   add_figure(p, width = inches(6), height = inches(3))
 
+oid <- stringr::str_pad(oid, 2, "left", "0")
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, ".pdf")),
+  file_graph_alone = 
+    file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, "_af.pdf"))
+)
 ```
-
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
 #| fig-width: 11.7
@@ -360,55 +464,758 @@ p <- clean_slate() |>
 show_slate(p)
 ```
 
-### Gene clustering
+##### Network
+
+```{r, network}
+# gene dissimilarity
+tom_dis <- dta_expr |>
+  adjacency(
+    type = ctrl_wgcna$adjacency$type,
+    power = ctrl_wgcna$adjacency$power,
+    corFnc = ctrl_wgcna$adjacency$cor_fn$value
+  ) |>
+  TOMsimilarity(TOMType = ctrl_wgcna$tom$type) |>
+  (\(tom) 1 - tom)()
+
+gene_hc <- tom_dis |>
+  as.dist() |>
+  hclust(method = "average")
+
+# gene clustering
+dyn_mod <- cutreeDynamic(
+  gene_hc,
+  cutHeight = ctrl_wgcna$cuttree$cut_height,
+  minClusterSize = ctrl_wgcna$cuttree$min_cluster_size,
+  method = "hybrid",
+  distM = tom_dis,
+  deepSplit = ctrl_wgcna$cuttree$deep_split,
+  pamRespectsDendro = FALSE
+)
+dyn_col <- labels2colors(dyn_mod)
+
+# me: module eigengenes (also used to merge dyn_col)
+dyn_mge <- dta_expr |> WGCNA::mergeCloseModules(dyn_col)
+meig <- dyn_mge$newMEs
+```
+
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+# Not exported yet
+WGCNA::plotDendroAndColors(
+  dendro = gene_hc,
+  colors = dyn_mge$color,
+  dendroLabels = FALSE,
+  addGuide = TRUE,
+  guideHang = 0.05,
+  groupLabels = "",
+  cex.rowText = 0.5,
+  cex.colorLabels = 0.5,
+  cex.dendroLabels = 0.9,
+  marAll = c(1, 1, 1, 1),
+  axes = FALSE,
+  ylab = NULL,
+  main = NULL
+)
+graphics::par(mfrow = c(1, 1))
+```
+
+#### Eigengenes exploration
+
+##### OID 3 - Heatmap
+
+```{r, eig_traits_heatmap_functions}
+theme_custom_dend <- function(gg, ...) {
+  gg +
+    scale_x_continuous(expand = c(0, 0.5)) +
+    scale_y_continuous(expand = c(0.02, 0)) +
+    theme(
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      legend.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      panel.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      plot.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      )
+    ) +
+    theme(...)
+}
+
+#' @describeIn wrap_wgcna improved correlation matrix.
+#' @param mat_y,mat_x the matrix used in rows or columns.
+#' @param draw (`logical`)
+#' @param newpage (`logical`)
+#' @import ggplot2
+#' @export
+#'
+gg_eigen <- function(mat_y, mat_x, draw = FALSE, newpage = FALSE) {
+
+  dta <- stats::cor(mat_y, mat_x, use = "pairwise.complete.obs")
+  dta <- reshape2::melt(
+    dta, varnames = c("eig", "traits"), value.name = "cor"
+  )
+  dta$cor_pval <- WGCNA::corPvalueStudent(dta$cor, nSamples = nrow(mat_x))
+
+  dendro_y   <- stats::hclust(d = stats::as.dist(1 - stats::cor(mat_y)))
+  dendro_y   <- stats::as.dendrogram(dendro_y);
+  y_neworder <- labels(dendro_y)
+  dendro_y   <- ggdendro::ggdendrogram(data = dendro_y, rotate = TRUE) +
+    theme(plot.margin = unit(c(0,0,0,-0.2), units="lines"))
+  dendro_y <- theme_custom_dend(gg = dendro_y)
+
+  dendro_x <- stats::as.dist(1 - stats::cor(mat_x))
+  dendro_x <- stats::hclust(d = stats::dist(x = dendro_x))
+  dendro_x <- stats::as.dendrogram(dendro_x)
+  x_neworder <- labels(dendro_x)
+  dendro_x <- ggdendro::ggdendrogram(data = dendro_x, rotate = FALSE) +
+    theme(plot.margin = unit(c(0,0,-.8,0), units="lines"))
+  dendro_x <- theme_custom_dend(gg = dendro_x)
+
+  dta$traits <- factor(dta$traits, levels = x_neworder)
+  dta$eig <- factor(dta$eig, levels = y_neworder)
+
+  dta$cor_pval_2d <- format(round(dta$cor_pval, 2), nsmall = 2)
+
+  # Create heatmap plot
+  heatmap.plot <- ggplot(
+    data = dta,
+    mapping = aes_string(x = "traits", y = "eig")
+  ) + geom_tile(data = dta, fill = "transparent", col = "gray") +
+    geom_tile(
+      data = dta[dta$cor_pval < 0.1, ],
+      mapping = aes_string(fill = "cor")
+    ) + geom_text(
+      data = dta[dta$cor_pval < 0.1, ],
+      mapping = aes_string(label = "cor_pval_2d"),
+      col = "white", size = 2
+    ) + scale_fill_viridis_c(
+      breaks = seq(-1, 1, .2),
+      name = "Corr.",
+      guide = guide_colourbar(barheight = 10),
+      option = "B",
+      direction = -1,
+      lim = c(-1, 1),
+      begin = .1,
+      end = .9
+    )+ coord_cartesian(
+      expand = FALSE
+    ) + theme(
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid.major = element_blank(),
+      legend.position = "left",
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      panel.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      plot.background = element_rect(
+        fill = "transparent", colour = "transparent"
+      ),
+      legend.key.width = grid::unit(.3, "cm"),
+    )
+
+  a1 <- ggplotGrob(heatmap.plot)
+  a2 <- ggplotGrob(dendro_y)
+  a <- cbind(a1, a2, size = "max")
+  b <- ggplot2::ggplotGrob(dendro_x)
+  b <- gtable::gtable_add_cols(
+    b,
+    widths = a1$widths[1:(length(a1$widths)-length(b$widths))],
+    pos = 0
+  )
+  b <- gtable::gtable_add_cols(b, widths = a2$widths, pos = -1)
+
+  ab <- rbind(b, a, size = "last")
+  ab <- rbind(b, a, size = "last", z = c(1,10))
+  ab$heights[7] <- unit(3, "lines")
+  ab$widths[16] <- unit(3, "lines")
+
+  if (draw) {
+    if (newpage) grid::grid.newpage()
+    grid::grid.draw(ab)
+  }
+
+  list(
+    gg = ab,
+    data = dta
+  )
+}
+
+prep_col <- function(x) UseMethod("prep_col", x)
+prep_col.numeric <- function(x) identity(x)
+prep_col.factor <- function(x) as.numeric(x)
+prep_col.character <- function(x) {
+  x <- as.factor(x)
+  prep_col(x)
+}
+
+```
+
+```{r, wgcna_heatmap_graph}
+res <- gg_eigen(
+  dta_traits |>
+    subset(select = c(
+      diabcd, diab, age, trainn,
+      chol, glu0, glu120, glu30, glu60, hba1c, hdl,
+      homab, homair, insulin0, insulin120, insulin30, insulin60, ldl,
+      matsuda, trig, bmi, bodyfatp, dcal, dcarbt, dfatt,
+      dprot, fatacfr, fatmass, leanmass, smmass, vat, vo2maxe,
+      vo2maxlbm, vo2maxml, weight
+    )) |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
+  meig
+)
+```
 
 ```{r}
-pwr <- cfg_prog$rna$wgcna$sft$allmirna
-adjc <- adjacency(dta_expr, power = pwr)
-
-# Turn adjacency into topological overlap
-tom <- TOMsimilarity(adjc)
-diss_tom <- 1 - tom
-
-gene_hc <- hclust(as.dist(diss_tom), method = "average")
-
-# We like large modules, so we set the minimum module size relatively high:
-minModuleSize <- 30
-
-# Module identification using dynamic tree cut:
-dyn_mods <- cutreeDynamic(
-  dendro = gene_hc,
-  distM = diss_tom,
-  deepSplit = 2,
-  pamRespectsDendro = FALSE,
-  minClusterSize = minModuleSize
-)
-table(dyn_mods)
-
-# Convert numeric lables into colors
-dyn_col <- labels2colors(dyn_mods)
-table(dyn_col)
+oid <- 3
 ```
 
+```{r, export_wgcna_heatmap_graph}
+p <- clean_slate() |>
+  add_figure(res$gg)
+
+oid <- stringr::str_pad(oid, 2, "left", "0")
+export_as(
+  p,
+  file = file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, ".pdf")),
+  file_graph_alone = 
+    file.path(cfg_prog$paths$grh, paste0(params$basenm, "_", oid, "_af.pdf"))
+)
+```
 
 ```{r, eval=cfg_prog$knitr$results!="hide"}
-# Plot the dendrogram and colors underneath
-plotDendroAndColors(
-  gene_hc,
-  dyn_col,
-  "Dynamic Tree Cut",
-  dendroLabels = FALSE, hang = 0.03,
-  addGuide = TRUE, guideHang = 0.05,
-  main = "Gene dendrogram and module colors"
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+##### OID 4 - Excel file
+
+```{r}
+oid <- 4
+title <- "miRNA at baseline - WGCNA modules"
+```
+
+```{r, export_data}
+spl_mod <- rbind(
+  dyn_mge$oldMEs |>
+    as.data.frame() |>
+    tibble::rownames_to_column("sample") |>
+    tidyr::pivot_longer(
+      cols = -"sample",
+      names_to = "module"
+    ) |>
+    within(type <- "raw_me"),
+  dyn_mge$newMEs |>
+    as.data.frame() |>
+    tibble::rownames_to_column("sample") |>
+    tidyr::pivot_longer(
+      cols = -"sample",
+      names_to = "module"
+    ) |>
+    within(type <- "merged_me")
 )
 
+ft_mod <- data.frame(
+  feature = colnames(dta_expr),
+  raw_me = dyn_col,
+  merged_me = dyn_mge$colors
+)
+
+oid <- stringr::str_pad(oid, 2, "left", "0")
+
+export_xl(
+  ft_mod = ft_mod,
+  spl_mod = spl_mod,
+  info = c(
+    title = title,
+    ft_mod = wrap_long_lines(
+      "Associate genetic features with calculated module (a feature belongs to
+      a module)"
+    ),
+    spl_mod = "Sample eigengen value (eigengen _expression profile_)",
+    source = "UMB-BESD"
+  ),
+  dir = cfg_prog$paths$grh,
+  basenm = paste0(params$basenm, "_", oid),
+  rdata = TRUE
+)
+```
+
+
+### mRNA / Baseline
+
+```{r, mrna_settings, eval=TRUE}
+#' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
+#' # WGCNA: gene in rows, sample in cols
+
+ctrl <- cfg_prog$rna
+ngs_assay <- "mrna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$baseline$mrna
+```
+
+```{r, filter}
+```
+
+```{r}
+expr_desc <- "mRNA / Baseline - VST"
+exportas <- "dta_11_01.RData"
+```
+
+```{r, save_expr_dta}
+attr(dta_expr, "desc") <- expr_desc
+attr(dta_expr, "label") <- "Variance-Stabilised Transformed expression matrix"
+
+knitr::kable(dta_expr[1:5, 1:3])
+filenm <- file.path(cfg_prog$paths$dta, exportas)
+save(dta_expr, file = filenm)
+message("Export: ", filenm)
+
+rm(expr_desc, exportas)
+```
+
+#### Sample clustering (OID 5)
+
+```{r, sample_clustering, eval=TRUE}
+```
+
+```{r}
+oid <- 5
+title <- "mRNA / Baseline -Clustering dendrogram of samples based on their
+  Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+
+#### Gene Clustering
+
+##### Soft threshold determination (OID 6)
+
+```{r, sft_determination}
+```
+
+```{r}
+oid <- 6
+title <- "mRNA / Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+
+##### Network
+
+```{r, network}
+```
+
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+```
+
+
+#### Eigengenes exploration
+
+##### OID 7 - Heatmap
+
+```{r, eig_traits_heatmap}
+```
+
+```{r, wgcna_heatmap_graph_oid7}
+res <- gg_eigen(
+  dta_traits |>
+    subset(select = c(
+      diabcd, diab, age, trainn,
+      chol, glu0, glu120, glu30, glu60, hba1c, hdl,
+      homab, homair, insulin0, insulin120, insulin30, insulin60, ldl,
+      matsuda, trig, bmi, bodyfatp, dcal, dcarbt, dfatt,
+      dprot, fatacfr, fatmass, leanmass, smmass, vat, vo2maxe,
+      vo2maxlbm, vo2maxml, weight
+    )) |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
+  meig
+)
+```
+
+```{r}
+oid <- 7
+```
+
+```{r, export_wgcna_heatmap_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+##### OID 8 - Excel file
+
+```{r}
+oid <- 8
+title <- "mRNA at baseline - WGCNA modules"
+```
+
+```{r, export_data}
+```
+
+### miRNA / CHG
+
+```{r, mirna_chg_settings, eval=TRUE}
+#' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
+#' # WGCNA: gene in rows, sample in cols
+
+ctrl <- cfg_prog$rna
+ngs_assay <- "allmirna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$chg$allmirna # TODO
+
+# Specific to sample_clustering
+col_fill <- "glu120_chg"
+```
+
+```{r, prep_data_chg}
+filter_for_paired_visits <- function(mae) {
+  assert_that(all(table(colData(mae)$subjid) <= 2))
+
+  subj <- table(colData(mae)$subjid)
+  subj <- names(subj[subj == 2])
+  mae <- mae[, colData(mae)$subjid %in% subj, ]
+
+  chk_df <- as.data.frame(colData(mae))
+  check <- split(chk_df, f = chk_df$avisit)
+
+  # Verify the selection:
+  assert_that(all(
+    sapply(check, subj = subj,\(x, subj) all(subj %in% x$subjid))
+  ))
+  mae
+}
+
+gc()
+dta <- besd_mae |>
+  (\(mae) mae[ , , ngs_assay])() |>
+  filter_for_depth(ngs_assay, ctrl$depth_threshold[[ngs_assay]]) |>
+  filter_for_paired_visits() |>
+  filter_for_low_expr(ngs_assay, ctrl$cpm_threshold[[ngs_assay]]) |>
+  (\(mae) {
+    # VST transformation
+    colData(mae) <- droplevels(colData(mae))
+    colData(mae)$avisit_ <- factor(
+      colData(mae)$avisit,
+      levels = levels(colData(mae)$avisit),
+      labels = sub(" ", "_", levels(colData(mae)$avisit))
+    )
+    coldata <- colData(mae)[c("diabcd", "subjid", "avisit_")]
+
+    mae[[ngs_assay]] <- DESeq2::DESeqDataSetFromMatrix(
+      countData = mae[[ngs_assay]],
+      colData = colData(x = mae),
+      design = stats::formula(~ subjid + avisit_)
+    ) |>
+      DESeq2::varianceStabilizingTransformation(blind = FALSE) |>
+      SummarizedExperiment::assay()
+
+    mae
+  })() |>
+  filter_for_coldata("diabcd", is = c("NGT", "T2D")) |>
+  (\(mae) {
+    # Get traits: BL, M3, CHG:
+    bl <- mae[, colData(mae)$avisit == "Baseline", ]
+    m3 <- mae[, colData(mae)$avisit == "Month 3", ]
+    assert_that(all(colData(bl)$subjid == colData(m3)$subjid))
+    mat <- m3[[ngs_assay]] - bl[[ngs_assay]]
+    nm <- setNames(colData(mae)$subjid, nm = rownames(colData(mae)))
+    colnames(mat) <- nm[colnames(mat)]
+
+    get_vars_when <- function(mae,
+                              fun = is.numeric,
+                              col_names = TRUE) {
+      df <- colData(mae)
+      assert_that(all(table(df$subjid) <= 1))
+      rownames(df) <- df$subjid
+      df <- df[, sapply(df, fun)]
+      if (col_names)
+        colnames(df) <- paste0(tolower(colnames(df)), "_", substitute(mae))
+      df
+    }
+    m3_cd <- get_vars_when(m3, is.numeric) # m3_col data
+    bl_cd <- get_vars_when(bl, is.numeric)
+    # bl qualitative (diabcd and other)
+    bl_ql <- get_vars_when(bl, Negate(is.numeric), col_names = FALSE)
+    traits <- Map(a = m3_cd, b = bl_cd, f = \(a, b) a - b) |>
+      S4Vectors::DataFrame() |>
+      (\(df, ...) {
+        args <- list(...)
+        colnames(df) <- gsub("_m3", "_chg", colnames(df))
+        df <- do.call(cbind, c(args, list(df)))
+        # Constant columns are not interesting for gene variation association
+        df[sapply(df, sd) > 0]
+      })(bl_cd, m3_cd) |>
+      cbind(bl_ql)
+
+    MultiAssayExperiment(
+      experiments = ExperimentList(vst = mat),
+      colData = traits
+    )
+  })()
+
+#' WGCNA Expression data.
+#'
+#' A matrix or data frame in which columns are genes and rows ar samples.
+#'
+dta_expr <- t(dta[["vst"]])
+assert_that(WGCNA::goodSamplesGenes(dta_expr, verbose = 0)$allOK)
+dta_traits <- colData(dta) |> droplevels()
 
 ```
 
-#### Legacy
+#### Sample Clustering (OID 9)
+
+```{r, sample_clustering, eval=TRUE}
+```
+
+```{r}
+oid <- 9
+title <- "miRNA / Change from Baseline - Clustering dendrogram of samples based
+  on their Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+
+#### Gene Clustering
+
+##### Soft threshold determination (OID 10)
+
+```{r, sft_determination}
+```
+
+```{r}
+oid <- 10
+title <- "Micro-RNA / Change from Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+
+##### Network
+
+```{r, network}
+```
+
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+```
+
+
+#### Eigengenes exploration
+
+##### OID 11 - Heatmap
+
+```{r, eig_traits_heatmap}
+```
+
+```{r, wgcna_heatmap_graph_oid11}
+res <- gg_eigen(
+  dta_traits |>
+    (\(df) df[sapply(
+       df,
+       function(x) if (is.numeric(x)) sd(x) > 0 else length(unique(x)) > 1
+     )]) () |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
+  meig
+)
+```
+
+```{r}
+oid <- 11
+```
+
+```{r, export_wgcna_heatmap_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+##### OID 12 - Excel file
+
+```{r}
+oid <- 12
+title <- "miRNA Change from Baseline - WGCNA modules"
+```
+
+```{r, export_data}
+```
+
+
+### mRNA / CHG
+
+```{r, mrna_chg_settings, eval=TRUE}
+#' # https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/FemaleLiver-01-dataInput.pdf
+#' # WGCNA: gene in rows, sample in cols
+
+ctrl <- cfg_prog$rna
+ngs_assay <- "mrna"
+ctrl_wgcna <- cfg_prog$rna$wgcna$chg$mrna
+
+# Specific to sample_clustering
+col_fill <- "glu120_chg"
+```
+
+```{r, prep_data_chg}
+```
+
+#### Sample Clustering (OID 13)
+
+```{r, sample_clustering, eval=TRUE}
+```
+
+```{r}
+oid <- 13
+title <- "mRNA / Change from Baseline - Clustering dendrogram of samples based
+  on their Euclidean distance and trait heatmap"
+```
+
+```{r, export_sample_clustering_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+
+#### Gene Clustering
+
+##### Soft threshold determination (OID 14)
+
+```{r, sft_determination}
+```
+
+```{r}
+oid <- 14
+title <- "mRNA / Change from Baseline - Soft threshold determination"
+```
+
+```{r, export_sft_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+##### Network
+
+```{r, network}
+```
+
+```{r, gene_dendro, eval=cfg_prog$knitr$results!="hide"}
+```
+
+
+#### Eigengenes exploration
+
+##### OID 15 - Heatmap
+
+```{r, eig_traits_heatmap}
+```
+
+```{r, wgcna_heatmap_graph_oid15}
+res <- gg_eigen(
+  dta_traits |>
+    (\(df) df[sapply(
+       df,
+       function(x) if (is.numeric(x)) sd(x) > 0 else length(unique(x)) > 1
+     )]) () |>
+    lapply(prep_col)|>
+    DataFrame(row.names = rownames(dta_traits)) |>
+    as.matrix(),
+  meig
+)
+```
+
+```{r}
+oid <- 15
+```
+
+```{r, export_wgcna_heatmap_graph}
+```
+
+```{r, eval=cfg_prog$knitr$results!="hide"}
+#| fig-width: 11.7
+#| fig-height: 8.3
+show_slate(p)
+```
+
+##### OID 16 - Excel file
+
+```{r}
+oid <- 16
+title <- "mRNA Change from Baseline - WGCNA modules"
+```
+
+```{r, export_data}
+```
+
+### Legacy
 
 ```{r, eval=FALSE, include=FALSE}
-
+control_wgcna <- function(
+  power,
+  type = "signed",
+  TOMType = "signed",
+  corFnc = c("pearson" = "cor", "bicor" = "bicor")[1], 
+  deepSplit = 1, # wa 2 for Medium sensitivity
+  cutHeight = 0.995, # Default 0.995
+  minClusterSize = 20, # min(20, ncol(datExpr)/2 ) 
+  verbose = TRUE
+  ) {
+  as.list(environment())
+}
 #' WGCNA Wrappers
 #' 
 #' Set of function for standardised pre/post processing of WGCNA results.

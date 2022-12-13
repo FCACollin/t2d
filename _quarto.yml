@@ -22,19 +22,21 @@ book:
     - t2d_07_mir.qmd # miR DE analysis
 #    - t2d_10_chg.qmd # deprecated
     - t2d_11_wcn.qmd # miR DE analysis
+    - t2d_13_gea.qmd
     - references.qmd
 
 bibliography: references.bib
 
 format:
   html:
+    toc-depth: 5
     theme:
       light: flatly
       dark: superhero
     page-layout: full
     code-block-bg: true
     code-block-border-left: "#31BAE9"
-    code-fold: show
+    code-fold: true
     code-link: true
     code-overflow: wrap
     code-summary: "Show the code"
@@ -55,4 +57,4 @@ always_allow_html: true
 
 editor:
   markdown:
-    canonical: true
+    canonical: false
